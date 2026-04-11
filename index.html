@@ -40,7 +40,8 @@ Team LaptopHulp NL`;
 
     const blockSymbols  = (v) => v.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ\s'-]/g,"");
     const onlyLetters   = (v) => /^[A-Za-zÀ-ÖØ-öø-ÿ\s'-]+$/.test(v.trim()) && v.trim().length > 0;
-    const validPostcode = (v) => /^\d{4}\s?[A-Z]{2}$/i.test(v.trim());
+    const getPostcode = (f) => f.pc1 && f.pc2 ? f.pc1 + " " + f.pc2 : "";
+    const validPostcode = (f) => /^\d{4}$/.test(f.pc1) && /^[A-Z]{2}$/.test(f.pc2);
 
     function parseDate(str) {
       if (!str) return null;
@@ -129,7 +130,7 @@ Team LaptopHulp NL`;
       rows.forEach(r => lines.push([
         r.voornaam,r.achternaam,`${r.geb_dag} ${r.geb_maand} ${r.geb_jaar}`,
         r.telefoon,r.email,r.straatnaam,r.huisnummer,
-        r.postcode,r.stadsdeel,r.stadspas,r.apparaat,r.timestamp
+        (r.pc1&&r.pc2?r.pc1+" "+r.pc2:""),r.stadsdeel,r.stadspas,r.apparaat,r.timestamp
       ].map(esc).join(",")));
       const blob = new Blob(["\uFEFF"+lines.join("\n")],{type:"text/csv;charset=utf-8"});
       const url  = URL.createObjectURL(blob);
@@ -226,10 +227,11 @@ Team LaptopHulp NL`;
       const e = {};
       if(!f.straatnaam.trim()) e.straatnaam="Straatnaam is verplicht";
       if(!f.huisnummer.trim()) e.huisnummer="Huisnummer is verplicht";
-      if(!f.postcode.trim()) e.postcode="Postcode is verplicht";
-      else if(!validPostcode(f.postcode)) e.postcode="Formaat: 1234 AB";
+      if(!f.pc1) e.postcode="Postcode is verplicht";
+      else if(!/^\d{4}$/.test(f.pc1)) e.postcode="Voer 4 cijfers in";
+      else if(!f.pc2||!/^[A-Za-z]{2}$/.test(f.pc2)) e.postcode="Voer 2 letters in";
       if(!f.stadsdeel) e.stadsdeel="Stadsdeel is verplicht";
-      if(f.straatnaam.trim()&&f.huisnummer.trim()&&validPostcode(f.postcode)&&!addrOk)
+      if(f.straatnaam.trim()&&f.huisnummer.trim()&&validPostcode(f)&&!addrOk)
         e.addrCheck="Controleer eerst het adres via de knop hieronder";
       return e;
     };
@@ -251,7 +253,7 @@ Team LaptopHulp NL`;
       {title:"Apparaat",        sub:"Uw keuze"},
     ];
     const EMPTY={voornaam:"",achternaam:"",geb_dag:"",geb_maand:"",geb_jaar:"",
-                 telefoon:"",email:"",straatnaam:"",huisnummer:"",postcode:"",
+                 telefoon:"",email:"",straatnaam:"",huisnummer:"",pc1:"",pc2:"",
                  stadsdeel:"",stadspas:"",apparaat:""};
 
     // Shared UI
@@ -328,23 +330,6 @@ Team LaptopHulp NL`;
     }
 
     function Step3({form,upd,errors,addrStatus,addrMsg,addrOk,onCheck}) {
-      const { useState: useLocalState } = React;
-
-      // Use local state for the two postcode parts to avoid re-render issues
-      const [pc1, setPc1] = useLocalState(() => (form.postcode||"").replace(/\s.*$/,""));
-      const [pc2, setPc2] = useLocalState(() => (form.postcode||"").replace(/^\d+\s?/,"").slice(0,2).toUpperCase());
-
-      const handlePc1 = (v) => {
-        const digits = v.replace(/\D/g,"").slice(0,4);
-        setPc1(digits);
-        upd("postcode", digits + (pc2 ? " " + pc2 : ""));
-      };
-      const handlePc2 = (v) => {
-        const letters = v.replace(/[^a-zA-Z]/g,"").slice(0,2).toUpperCase();
-        setPc2(letters);
-        upd("postcode", pc1 + (letters ? " " + letters : ""));
-      };
-
       return (
         <div>
           <Field label="Straatnaam *" error={errors.straatnaam}>
@@ -356,13 +341,15 @@ Team LaptopHulp NL`;
             </Field>
             <Field label="Postcode *" hint="4 cijfers + 2 letters" error={errors.postcode}>
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                <input value={pc1}
-                  onChange={e=>handlePc1(e.target.value)}
+                <input
+                  value={form.pc1}
+                  onChange={e=>upd("pc1", e.target.value.replace(/\D/g,"").slice(0,4))}
                   placeholder="1234" maxLength={4}
                   style={{...C.input,width:"52%",textAlign:"center",borderColor:errors.postcode?"#ef4444":"#cbd5e1"}}/>
                 <span style={{fontWeight:700,color:"#94a3b8",fontSize:16,flexShrink:0}}>–</span>
-                <input value={pc2}
-                  onChange={e=>handlePc2(e.target.value)}
+                <input
+                  value={form.pc2}
+                  onChange={e=>upd("pc2", e.target.value.replace(/[^a-zA-Z]/g,"").slice(0,2).toUpperCase())}
                   placeholder="AB" maxLength={2}
                   style={{...C.input,width:"40%",textAlign:"center",borderColor:errors.postcode?"#ef4444":"#cbd5e1",textTransform:"uppercase"}}/>
               </div>
@@ -466,7 +453,7 @@ Team LaptopHulp NL`;
           <div style={{...C.summary,textAlign:"left",marginBottom:20}}>
             {[["📅","Geboortedatum",`${form.geb_dag} ${form.geb_maand} ${form.geb_jaar}`],
               ["📱","Telefoon",form.telefoon],["📧","E-mail",form.email],
-              ["📍","Adres",`${form.straatnaam} ${form.huisnummer}, ${form.postcode}`],
+              ["📍","Adres",`${form.straatnaam} ${form.huisnummer}, ${getPostcode(form)}`],
               ["🏙","Stadsdeel",form.stadsdeel],["🪪","Stadspas",form.stadspas],
               ["💻","Apparaat",dev?`${dev.icon} ${dev.label}`:"—"]
             ].map(([icon,k,v])=>(
@@ -631,8 +618,6 @@ Team LaptopHulp NL`;
       const upd = (f,v) => {
         setForm(p=>({...p,[f]:v}));
         setErrors(p=>({...p,[f]:""}));
-        // Only reset address verification if street or housenumber changes, NOT postcode
-        // (postcode is managed inside Step3 local state)
         if(["straatnaam","huisnummer"].includes(f)){
           setAddrOk(false); setAddrSt("idle"); setAddrMsg("");
         }
@@ -648,15 +633,21 @@ Team LaptopHulp NL`;
       };
 
       const checkAddress = async () => {
-        if(!form.straatnaam.trim()||!form.huisnummer.trim()||!validPostcode(form.postcode)){
+        const postcode = getPostcode(form);
+        if(!form.straatnaam.trim()||!form.huisnummer.trim()||!validPostcode(form)){
           setAddrMsg("Vul eerst straatnaam, huisnummer en postcode in."); setAddrSt("error"); return;
         }
         setAddrSt("checking"); setAddrMsg(""); setAddrOk(false);
-        const result = await verifyAddress(form.straatnaam,form.huisnummer,form.postcode);
+        const result = await verifyAddress(form.straatnaam,form.huisnummer,postcode);
         if(result.ok){
           setAddrOk(true); setAddrSt("ok");
           setAddrMsg(`✅ Adres bevestigd: ${result.formatted.straat} ${result.formatted.huisnr}, ${result.formatted.postcode} ${result.formatted.plaats}`);
-          if(result.formatted.postcode) upd("postcode",result.formatted.postcode);
+          // Update pc1/pc2 from confirmed postcode
+          if(result.formatted.postcode){
+            const pc = result.formatted.postcode.replace(/\s/g,"").toUpperCase();
+            upd("pc1", pc.slice(0,4));
+            upd("pc2", pc.slice(4,6));
+          }
         } else {
           setAddrOk(false); setAddrSt("error"); setAddrMsg(`❌ ${result.error}`);
         }
