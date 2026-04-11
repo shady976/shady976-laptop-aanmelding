@@ -328,17 +328,20 @@ Team LaptopHulp NL`;
     }
 
     function Step3({form,upd,errors,addrStatus,addrMsg,addrOk,onCheck}) {
-      // Store postcode as two parts: pc1 (4 digits) + pc2 (2 letters)
-      // Combined into form.postcode as "1234 AB"
-      const pc1 = (form.postcode||"").slice(0,4);
-      const pc2 = (form.postcode||"").slice(5,7);
+      const { useState: useLocalState } = React;
 
-      const updPC1 = (v) => {
+      // Use local state for the two postcode parts to avoid re-render issues
+      const [pc1, setPc1] = useLocalState(() => (form.postcode||"").replace(/\s.*$/,""));
+      const [pc2, setPc2] = useLocalState(() => (form.postcode||"").replace(/^\d+\s?/,"").slice(0,2).toUpperCase());
+
+      const handlePc1 = (v) => {
         const digits = v.replace(/\D/g,"").slice(0,4);
+        setPc1(digits);
         upd("postcode", digits + (pc2 ? " " + pc2 : ""));
       };
-      const updPC2 = (v) => {
+      const handlePc2 = (v) => {
         const letters = v.replace(/[^a-zA-Z]/g,"").slice(0,2).toUpperCase();
+        setPc2(letters);
         upd("postcode", pc1 + (letters ? " " + letters : ""));
       };
 
@@ -353,11 +356,13 @@ Team LaptopHulp NL`;
             </Field>
             <Field label="Postcode *" hint="4 cijfers + 2 letters" error={errors.postcode}>
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                <input value={pc1} onChange={e=>updPC1(e.target.value)}
+                <input value={pc1}
+                  onChange={e=>handlePc1(e.target.value)}
                   placeholder="1234" maxLength={4}
-                  style={{...C.input,width:"54%",textAlign:"center",borderColor:errors.postcode?"#ef4444":"#cbd5e1"}}/>
-                <span style={{fontWeight:700,color:"#94a3b8",fontSize:18}}>–</span>
-                <input value={pc2} onChange={e=>updPC2(e.target.value)}
+                  style={{...C.input,width:"52%",textAlign:"center",borderColor:errors.postcode?"#ef4444":"#cbd5e1"}}/>
+                <span style={{fontWeight:700,color:"#94a3b8",fontSize:16,flexShrink:0}}>–</span>
+                <input value={pc2}
+                  onChange={e=>handlePc2(e.target.value)}
                   placeholder="AB" maxLength={2}
                   style={{...C.input,width:"40%",textAlign:"center",borderColor:errors.postcode?"#ef4444":"#cbd5e1",textTransform:"uppercase"}}/>
               </div>
@@ -626,7 +631,9 @@ Team LaptopHulp NL`;
       const upd = (f,v) => {
         setForm(p=>({...p,[f]:v}));
         setErrors(p=>({...p,[f]:""}));
-        if(["straatnaam","huisnummer","postcode"].includes(f)){
+        // Only reset address verification if street or housenumber changes, NOT postcode
+        // (postcode is managed inside Step3 local state)
+        if(["straatnaam","huisnummer"].includes(f)){
           setAddrOk(false); setAddrSt("idle"); setAddrMsg("");
         }
       };
