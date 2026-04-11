@@ -141,64 +141,39 @@ Team LaptopHulp NL`;
 
     async function verifyAddress(straat, huisnr, postcode) {
       try {
-        // Normalize both sides consistently
-        const pcClean     = postcode.replace(/\s/g,"").toUpperCase(); // "1093SZ"
-        const pcFormatted = pcClean.slice(0,4) + " " + pcClean.slice(4); // "1093 SZ"
-        const hnNum       = parseInt(huisnr.replace(/\D/g,""), 10); // 143 as number
+        const pcClean     = postcode.replace(/\s/g,"").toUpperCase();
+        const pcFormatted = pcClean.slice(0,4) + " " + pcClean.slice(4);
+        const hnNum       = parseInt(huisnr.replace(/\D/g,""), 10);
 
-        // Search PDOK using postcode + huisnummer (most reliable combo)
+        // Search by postcode + huisnummer only (most reliable in PDOK)
         const query = encodeURIComponent(pcFormatted + " " + hnNum);
         const url   = `https://api.pdok.nl/bzk/locatieserver/search/v3_1/free?q=${query}&fq=type:adres&rows=20`;
         const res   = await fetch(url);
         if (!res.ok) return {ok:false, error:"Verbinding met adresservice mislukt"};
-        const data  = await res.json();
-        const docs  = data?.response?.docs || [];
+        const docs  = (await res.json())?.response?.docs || [];
 
-        if (docs.length === 0) {
-          // Nothing found at all — try street+number to get correct postcode
-          const q2   = encodeURIComponent(straat + " " + hnNum);
-          const url2 = `https://api.pdok.nl/bzk/locatieserver/search/v3_1/free?q=${q2}&fq=type:adres&rows=5`;
-          const r2   = await fetch(url2);
-          if (r2.ok) {
-            const d2  = await r2.json();
-            const docs2 = d2?.response?.docs || [];
-            const sug = docs2.find(d => Number(d.huisnummer) === hnNum)?.postcode
-                     || docs2[0]?.postcode || "";
-            if (sug) return {ok:false, error:`Adres niet gevonden met deze postcode. Probeer: ${sug}`};
-          }
-          return {ok:false, error:"Adres niet gevonden in Nederland"};
-        }
-
-        // Look for exact match: same postcode (normalized) AND same huisnummer
+        // Accept if postcode + huisnummer match exactly
         const match = docs.find(d => {
           const dpc = (d.postcode||"").replace(/\s/g,"").toUpperCase();
-          const dhn = Number(d.huisnummer);
-          return dpc === pcClean && dhn === hnNum;
+          return dpc === pcClean && Number(d.huisnummer) === hnNum;
         });
+        if (match) return {ok:true, formatted:{
+          straat:   match.straatnaam     || straat,
+          huisnr:   String(match.huisnummer || huisnr),
+          postcode: match.postcode       || pcFormatted,
+          plaats:   match.woonplaatsnaam || "",
+        }};
 
-        if (match) {
-          return {ok:true, formatted:{
-            straat:   match.straatnaam     || straat,
-            huisnr:   String(match.huisnummer || huisnr),
-            postcode: match.postcode       || pcFormatted,
-            plaats:   match.woonplaatsnaam || "",
-          }};
-        }
-
-        // Docs found but postcode doesn't match → search by street+number to find correct postcode
-        const q2   = encodeURIComponent(`${straat} ${hnNum}`);
+        // Not found — search by street+number to suggest correct postcode
+        const q2   = encodeURIComponent(straat + " " + hnNum);
         const url2 = `https://api.pdok.nl/bzk/locatieserver/search/v3_1/free?q=${q2}&fq=type:adres&rows=10`;
         const r2   = await fetch(url2);
         if (r2.ok) {
-          const d2    = await r2.json();
-          const docs2 = d2?.response?.docs || [];
+          const docs2 = (await r2.json())?.response?.docs || [];
           const exact = docs2.find(d => Number(d.huisnummer) === hnNum);
-          if (exact?.postcode) {
-            return {ok:false, error:`Postcode klopt niet voor dit adres. Correcte postcode: ${exact.postcode}`};
-          }
+          if (exact?.postcode) return {ok:false, error:`Postcode klopt niet. Correcte postcode: ${exact.postcode}`};
         }
-        return {ok:false, error:`Postcode klopt niet voor dit adres`};
-
+        return {ok:false, error:`"${pcFormatted} ${hnNum}" niet gevonden. Controleer postcode en huisnummer.`};
       } catch(err) {
         return {ok:false, error:"Adrescontrole niet beschikbaar (geen verbinding met PDOK)"};
       }
@@ -235,7 +210,9 @@ Team LaptopHulp NL`;
     const v3 = (f, addrOk) => {
       const e = {};
       if(!f.straatnaam.trim()) e.straatnaam="Straatnaam is verplicht";
+      else if(!/^[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ\s]*$/.test(f.straatnaam)) e.straatnaam="Alleen letters, begint met hoofdletter";
       if(!f.huisnummer.trim()) e.huisnummer="Huisnummer is verplicht";
+      else if(!/^\d+(-[A-Za-z]{1,3})?$/.test(f.huisnummer.trim())) e.huisnummer="Bijv. 36 of 36-A";
       if(!f.pc1) e.postcode="Postcode is verplicht";
       else if(!/^\d{4}$/.test(f.pc1)) e.postcode="Voer 4 cijfers in";
       else if(!f.pc2||!/^[A-Za-z]{2}$/.test(f.pc2)) e.postcode="Voer 2 letters in";
@@ -341,12 +318,35 @@ Team LaptopHulp NL`;
     function Step3({form,upd,errors,addrStatus,addrMsg,addrOk,onCheck}) {
       return (
         <div>
-          <Field label="Straatnaam *" error={errors.straatnaam}>
-            <Inp value={form.straatnaam} onChange={v=>upd("straatnaam",v)} placeholder="Hoofdstraat" error={errors.straatnaam}/>
+          <Field label="Straatnaam *" hint="Alleen letters en spaties, begint met hoofdletter" error={errors.straatnaam}>
+            <Inp value={form.straatnaam}
+              onChange={v => {
+                // Only letters (including Dutch/accented) and spaces
+                const clean = v.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ\s]/g,"");
+                // Auto-capitalize first letter
+                const capped = clean.length > 0 ? clean.charAt(0).toUpperCase() + clean.slice(1) : clean;
+                upd("straatnaam", capped);
+              }}
+              placeholder="Hoofdstraat" error={errors.straatnaam}/>
           </Field>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
-            <Field label="Huisnummer *" hint="Bijv. 12A" error={errors.huisnummer}>
-              <Inp value={form.huisnummer} onChange={v=>upd("huisnummer",v)} placeholder="12A" error={errors.huisnummer}/>
+            <Field label="Huisnummer *" hint="Cijfers, eventueel -A bijv. 36 of 36-A" error={errors.huisnummer}>
+              <Inp value={form.huisnummer}
+                onChange={v => {
+                  // Allow digits only, or digits-letters (e.g. 36 or 36-A)
+                  // Remove anything that's not digit, dash, or letter
+                  let clean = v.replace(/[^0-9A-Za-z\-]/g,"");
+                  // Extract parts: digits, optional dash+letters
+                  const numPart = clean.replace(/[^0-9]/g,"").slice(0,6);
+                  const rest    = clean.replace(/^[0-9]*/,""); // everything after digits
+                  let sufPart   = rest.replace(/[^A-Za-z\-]/g,"");
+                  // Ensure dash before letters
+                  if (sufPart && !sufPart.startsWith("-")) sufPart = "-" + sufPart;
+                  // Keep only -X or -XX
+                  sufPart = sufPart.slice(0,3).toUpperCase(); // max "-AB"
+                  upd("huisnummer", numPart + sufPart);
+                }}
+                placeholder="36 of 36-A" error={errors.huisnummer}/>
             </Field>
             <Field label="Postcode *" hint="4 cijfers + 2 letters" error={errors.postcode}>
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
