@@ -212,7 +212,7 @@ Team LaptopHulp NL`;
       if(!f.straatnaam.trim()) e.straatnaam="Straatnaam is verplicht";
       else if(!/^[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ\s]*$/.test(f.straatnaam)) e.straatnaam="Alleen letters, begint met hoofdletter";
       if(!f.huisnummer.trim()) e.huisnummer="Huisnummer is verplicht";
-      else if(!/^\d+(-[A-Za-z0-9]{1,4})?$/.test(f.huisnummer.trim())) e.huisnummer="Bijv. 36, 36-A of 7-2";
+      else if(!/^\d+(-[A-Za-z0-9]{1,4})?$/.test(f.huisnummer.trim())) e.huisnummer="Moet beginnen met cijfer(s), bijv. 36, 36-A of 7-2";
       if(!f.pc1) e.postcode="Postcode is verplicht";
       else if(!/^\d{4}$/.test(f.pc1)) e.postcode="Voer 4 cijfers in";
       else if(!f.pc2||!/^[A-Za-z]{2}$/.test(f.pc2)) e.postcode="Voer 2 letters in";
@@ -333,15 +333,9 @@ Team LaptopHulp NL`;
             <Field label="Huisnummer *" hint="Bijv. 36, 36-A of 7-2" error={errors.huisnummer}>
               <Inp value={form.huisnummer}
                 onChange={v => {
-                  // Allow: digits, dash, digits or letters after dash
-                  // Valid: 36, 36-A, 36-AB, 7-2, 7-2A
-                  const clean = v.replace(/[^0-9A-Za-z\-]/g,"");
-                  const numPart = clean.replace(/[^0-9]/g,"").slice(0,6);
-                  const rest    = clean.replace(/^[0-9]*/,"");
-                  let sufPart   = rest.replace(/[^A-Za-z0-9\-]/g,"");
-                  if (sufPart && !sufPart.startsWith("-")) sufPart = "-" + sufPart;
-                  sufPart = sufPart.slice(0,4).toUpperCase();
-                  upd("huisnummer", numPart + sufPart);
+                  // Allow digits, dash, letters only — preserve order as typed
+                  const clean = v.replace(/[^0-9A-Za-z\-]/g,"").toUpperCase();
+                  upd("huisnummer", clean);
                 }}
                 placeholder="36 of 36-A of 7-2" error={errors.huisnummer}/>
             </Field>
