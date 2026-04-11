@@ -799,66 +799,48 @@ Team LaptopHulp NL`;
       );
 
       // ── TOTP 2FA Implementation ─────────────────────────────────────
-      // Secret key — change this to your own random base32 string
-      const TOTP_SECRET = "JBSWY3DPEHPK3PXP"; // ← غيّر هذا المفتاح
-      const ADMIN_PASSWORD = "Cyberbank2025";   // ← غيّر كلمة المرور
+      const TOTP_SECRET    = "JBSWY3DPEHPK3PXP"; // ← غيّر هذا المفتاح
+      const ADMIN_PASSWORD = "Cyberbank2025";      // ← غيّر كلمة المرور
 
-      // Base32 decode
       const base32Decode = (s) => {
         const CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
         s = s.toUpperCase().replace(/=+$/,"");
-        let bits = 0, val = 0;
-        const out = [];
-        for(const c of s){
-          val = (val<<5)|CHARS.indexOf(c);
-          bits += 5;
-          if(bits>=8){ out.push((val>>>(bits-8))&255); bits-=8; }
-        }
+        let bits=0, val=0;
+        const out=[];
+        for(const c of s){ val=(val<<5)|CHARS.indexOf(c); bits+=5; if(bits>=8){out.push((val>>>(bits-8))&255);bits-=8;} }
         return new Uint8Array(out);
       };
 
-      // Generate TOTP code
-      const getTOTP = async (secret) => {
-        const key   = base32Decode(secret);
-        const epoch = Math.floor(Date.now()/1000/30);
-        const msg   = new Uint8Array(8);
-        for(let i=7;i>=0;i--){ msg[i]=epoch&0xff; epoch>>=8; } // won't work with let, fix:
-        const t = Math.floor(Date.now()/1000/30);
-        const tb = new DataView(new ArrayBuffer(8));
+      const getTOTP = async (secret, offset=0) => {
+        const key = base32Decode(secret);
+        const t   = Math.floor(Date.now()/1000/30) + offset;
+        const tb  = new DataView(new ArrayBuffer(8));
         tb.setUint32(4, t, false);
-        const cryptoKey = await crypto.subtle.importKey("raw",key,{name:"HMAC",hash:"SHA-1"},false,["sign"]);
-        const sig = await crypto.subtle.sign("HMAC", cryptoKey, tb.buffer);
-        const arr = new Uint8Array(sig);
-        const off = arr[19]&0xf;
-        const code = ((arr[off]&0x7f)<<24|(arr[off+1]&0xff)<<16|(arr[off+2]&0xff)<<8|(arr[off+3]&0xff))%1000000;
+        const ck  = await crypto.subtle.importKey("raw",key,{name:"HMAC",hash:"SHA-1"},false,["sign"]);
+        const sig = new Uint8Array(await crypto.subtle.sign("HMAC",ck,tb.buffer));
+        const off = sig[19]&0xf;
+        const code = ((sig[off]&0x7f)<<24|(sig[off+1]&0xff)<<16|(sig[off+2]&0xff)<<8|(sig[off+3]&0xff))%1000000;
         return String(code).padStart(6,"0");
       };
 
       const [adminAuth,  setAdminAuth]  = useState(false);
       const [showPwBox,  setShowPwBox]  = useState(false);
-      const [loginStep,  setLoginStep]  = useState(1); // 1=password, 2=totp
+      const [loginStep,  setLoginStep]  = useState(1);
       const [pwInput,    setPwInput]    = useState("");
       const [totpInput,  setTotpInput]  = useState("");
       const [loginError, setLoginError] = useState("");
-      const [totpLive,   setTotpLive]   = useState("------");
       const [totpTimer,  setTotpTimer]  = useState(30);
 
-      // Live TOTP display for admin (shows current code + countdown)
       React.useEffect(() => {
         if(!showPwBox || loginStep!==2) return;
-        let interval;
-        const update = async () => {
-          const code = await getTOTP(TOTP_SECRET);
-          setTotpLive(code);
-          setTotpTimer(30 - (Math.floor(Date.now()/1000) % 30));
-        };
-        update();
-        interval = setInterval(update, 1000);
-        return () => clearInterval(interval);
+        const tick = () => setTotpTimer(30-(Math.floor(Date.now()/1000)%30));
+        tick();
+        const iv = setInterval(tick,1000);
+        return ()=>clearInterval(iv);
       }, [showPwBox, loginStep]);
 
       const handleStep1 = () => {
-        if(pwInput === ADMIN_PASSWORD){
+        if(pwInput.trim() === ADMIN_PASSWORD){
           setLoginStep(2); setPwInput(""); setLoginError("");
         } else {
           setLoginError("Onjuist wachtwoord"); setPwInput("");
@@ -866,33 +848,27 @@ Team LaptopHulp NL`;
       };
 
       const handleStep2 = async () => {
-        const expected = await getTOTP(TOTP_SECRET);
-        // Also check previous 30s window for clock drift
-        const t = Math.floor(Date.now()/1000/30);
-        const tb1 = new DataView(new ArrayBuffer(8));
-        tb1.setUint32(4, t-1, false);
-        const cryptoKey = await crypto.subtle.importKey("raw",base32Decode(TOTP_SECRET),{name:"HMAC",hash:"SHA-1"},false,["sign"]);
-        const sig1 = await crypto.subtle.sign("HMAC",cryptoKey,tb1.buffer);
-        const arr1 = new Uint8Array(sig1);
-        const off1 = arr1[19]&0xf;
-        const prev = String(((arr1[off1]&0x7f)<<24|(arr1[off1+1]&0xff)<<16|(arr1[off1+2]&0xff)<<8|(arr1[off1+3]&0xff))%1000000).padStart(6,"0");
-
-        if(totpInput===expected || totpInput===prev){
-          setAdminAuth(true); setShowPwBox(false); setTotpInput("");
-          setLoginError(""); setLoginStep(1); setShowAdmin(true);
+        const c0 = await getTOTP(TOTP_SECRET,  0);
+        const c1 = await getTOTP(TOTP_SECRET, -1);
+        if(totpInput===c0 || totpInput===c1){
+          setAdminAuth(true); setShowPwBox(false); setShowAdmin(true);
+          setTotpInput(""); setLoginError(""); setLoginStep(1);
         } else {
-          setLoginError("Onjuiste code. Probeer opnieuw."); setTotpInput("");
+          setLoginError("Onjuiste code — probeer opnieuw"); setTotpInput("");
         }
       };
 
       const handleAdminLogout = () => {
         setAdminAuth(false); setShowAdmin(false);
         setLoginStep(1); setPwInput(""); setTotpInput(""); setLoginError("");
+        setShowPwBox(false);
       };
 
       const openLogin = () => {
-        setShowPwBox(p=>!p);
-        setLoginStep(1); setPwInput(""); setTotpInput(""); setLoginError("");
+        setShowPwBox(prev => {
+          if(!prev){ setLoginStep(1); setPwInput(""); setTotpInput(""); setLoginError(""); }
+          return !prev;
+        });
       };
 
       return (
@@ -901,7 +877,8 @@ Team LaptopHulp NL`;
           <div style={{width:"100%",maxWidth:680,display:"flex",justifyContent:"flex-end",padding:"6px 4px 0"}}>
             {!adminAuth ? (
               <button onClick={openLogin} style={{
-                background:"none",border:"none",color:"#e2e8f0",fontSize:11,cursor:"pointer",padding:"4px 8px",
+                background:"none",border:"none",color:"#94a3b8",fontSize:16,cursor:"pointer",padding:"4px 8px",
+                userSelect:"none",
               }}>⚙</button>
             ) : (
               <div style={{display:"flex",alignItems:"center",gap:8}}>
