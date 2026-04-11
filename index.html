@@ -113,6 +113,7 @@ Team LaptopHulp NL`;
                 jaar:           get("Jaar","jaar"),
                 serienummer:    get("Serienummer","serienummer"),
                 uitdelen_datum: get("Uitdelen Datum","uitdelen datum","uitdelen_datum"),
+                adres:          get("Adres","adres"),
               };
             });
             resolve({ok:true, rows: rows.filter(r => String(r.voornaam).trim())});
@@ -123,19 +124,36 @@ Team LaptopHulp NL`;
     }
 
     function exportCSV(rows) {
-      const headers = ["Voornaam","Achternaam","Geboortedatum","Telefoon","E-mail",
-        "Straatnaam","Huisnummer","Postcode","Stadsdeel","Stadspas","Apparaat","Datum aanmelding"];
-      const esc = (v) => `"${String(v||"").replace(/"/g,'""')}"`;
-      const lines = [headers.map(esc).join(",")];
+      // Use tab-separated values so Excel opens each field in its own column
+      const SEP = "\t";
+      const headers = [
+        "Voornaam","Achternaam","Dag","Maand","Jaar",
+        "Telefoonnummer","E-mail",
+        "Straatnaam","Huisnummer","Postcode","Stadsdeel",
+        "Stadspasnummer","Apparaat","Datum aanmelding"
+      ];
+      const esc = (v) => String(v||"").replace(/\t/g," ").replace(/\n/g," ");
+      const lines = [headers.join(SEP)];
       rows.forEach(r => lines.push([
-        r.voornaam,r.achternaam,`${r.geb_dag} ${r.geb_maand} ${r.geb_jaar}`,
-        r.telefoon,r.email,r.straatnaam,r.huisnummer,
-        (r.pc1&&r.pc2?r.pc1+" "+r.pc2:""),r.stadsdeel,r.stadspas,r.apparaat,r.timestamp
-      ].map(esc).join(",")));
-      const blob = new Blob(["\uFEFF"+lines.join("\n")],{type:"text/csv;charset=utf-8"});
+        r.voornaam,
+        r.achternaam,
+        r.geb_dag,
+        r.geb_maand,
+        r.geb_jaar,
+        r.telefoon,
+        r.email,
+        r.straatnaam,
+        r.huisnummer,
+        (r.pc1&&r.pc2 ? r.pc1+" "+r.pc2 : ""),
+        r.stadsdeel,
+        r.stadspas,
+        r.apparaat,
+        r.timestamp
+      ].map(esc).join(SEP)));
+      const blob = new Blob(["\uFEFF"+lines.join("\r\n")],{type:"text/tab-separated-values;charset=utf-8"});
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement("a");
-      a.href=url; a.download=`aanmeldingen_${new Date().toISOString().slice(0,10)}.csv`;
+      a.href=url; a.download=`aanmeldingen_${new Date().toISOString().slice(0,10)}.tsv`;
       a.click(); URL.revokeObjectURL(url);
     }
 
@@ -723,31 +741,34 @@ Team LaptopHulp NL`;
         else if(step===3){
           errs=v3(form,addrOk);
           // Check address duplicate if no other errors and addrOk
-          if(!Object.keys(errs).length && addrOk && db && !allowMultiAddr){
-            const adresInput = (form.straatnaam + " " + form.huisnummer).trim().toLowerCase();
-            // Check if this address is in exempt list
+          if(!Object.keys(errs).length && addrOk && !allowMultiAddr){
+            const straatNorm = form.straatnaam.trim().toLowerCase();
+            const huisNorm   = form.huisnummer.trim().toLowerCase();
+
+            // Check if exempt
+            const adresInput = straatNorm + " " + huisNorm;
             const isExempt = exemptAddrs.some(e => {
               const en = e.trim().toLowerCase();
-              return en && adresInput.includes(en);
+              return en.length > 0 && adresInput.includes(en);
             });
+
             if(!isExempt){
-              // Check if same address already in DB
-              const addrDup = db.rows.some(r => {
-                const rAddr = (String(r.adres||"")).trim().toLowerCase();
-                const rStraat = (String(r.straatnaam||r.voornaam||"")).trim().toLowerCase();
-                // Match straatnaam + huisnummer from DB
-                const dbAddr = (String(r.adres||"")).toLowerCase();
-                return dbAddr && dbAddr.includes(form.straatnaam.toLowerCase()) &&
-                       dbAddr.includes(form.huisnummer.toLowerCase());
-              });
-              // Also check current session submissions
+              // Check DB: Adres column contains "Straatnaam Huisnummer"
+              const dbDup = db ? db.rows.some(r => {
+                const dbAdres = String(r.adres||"").trim().toLowerCase();
+                if(!dbAdres) return false;
+                return dbAdres.includes(straatNorm) && dbAdres.includes(huisNorm);
+              }) : false;
+
+              // Check current session
               const sessionDup = submissions.some(s =>
-                s.straatnaam.toLowerCase()===form.straatnaam.toLowerCase() &&
-                s.huisnummer.toLowerCase()===form.huisnummer.toLowerCase()
+                s.straatnaam.trim().toLowerCase() === straatNorm &&
+                s.huisnummer.trim().toLowerCase() === huisNorm
               );
-              if(addrDup || sessionDup){
+
+              if(dbDup || sessionDup){
                 setBlocked({type:"same_cycle",
-                  message:"Er is al een aanmelding geregistreerd voor dit adres. Neem contact op met onze organisatie als u denkt dat dit een fout is."});
+                  message:`Er is al een aanmelding voor ${form.straatnaam} ${form.huisnummer}. Neem contact op als u denkt dat dit een fout is.`});
                 return;
               }
             }
