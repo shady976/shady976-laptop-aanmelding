@@ -147,7 +147,7 @@ Team LaptopHulp NL`;
 
         // Search by postcode + huisnummer only (most reliable in PDOK)
         const query = encodeURIComponent(pcFormatted + " " + hnNum);
-        const url   = `https://api.pdok.nl/bzk/locatieserver/search/v3_1/free?q=${query}&fq=type:adres&rows=20`;
+        const url   = `https://api.pdok.nl/bzk/locatieserver/search/v3_1/free?q=${query}&fq=type:adres&fq=woonplaatsnaam:Amsterdam&rows=20`;
         const res   = await fetch(url);
         if (!res.ok) return {ok:false, error:"Verbinding met adresservice mislukt"};
         const docs  = (await res.json())?.response?.docs || [];
@@ -164,9 +164,9 @@ Team LaptopHulp NL`;
           plaats:   match.woonplaatsnaam || "",
         }};
 
-        // Not found — search by street+number to suggest correct postcode
-        const q2   = encodeURIComponent(straat + " " + hnNum);
-        const url2 = `https://api.pdok.nl/bzk/locatieserver/search/v3_1/free?q=${q2}&fq=type:adres&rows=10`;
+        // Not found — search by street+number in Amsterdam only to suggest correct postcode
+        const q2   = encodeURIComponent(straat + " " + hnNum + " Amsterdam");
+        const url2 = `https://api.pdok.nl/bzk/locatieserver/search/v3_1/free?q=${q2}&fq=type:adres&fq=woonplaatsnaam:Amsterdam&rows=10`;
         const r2   = await fetch(url2);
         if (r2.ok) {
           const docs2 = (await r2.json())?.response?.docs || [];
@@ -212,7 +212,7 @@ Team LaptopHulp NL`;
       if(!f.straatnaam.trim()) e.straatnaam="Straatnaam is verplicht";
       else if(!/^[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ\s]*$/.test(f.straatnaam)) e.straatnaam="Alleen letters, begint met hoofdletter";
       if(!f.huisnummer.trim()) e.huisnummer="Huisnummer is verplicht";
-      else if(!/^\d+(-[A-Za-z]{1,3})?$/.test(f.huisnummer.trim())) e.huisnummer="Bijv. 36 of 36-A";
+      else if(!/^\d+(-[A-Za-z0-9]{1,4})?$/.test(f.huisnummer.trim())) e.huisnummer="Bijv. 36, 36-A of 7-2";
       if(!f.pc1) e.postcode="Postcode is verplicht";
       else if(!/^\d{4}$/.test(f.pc1)) e.postcode="Voer 4 cijfers in";
       else if(!f.pc2||!/^[A-Za-z]{2}$/.test(f.pc2)) e.postcode="Voer 2 letters in";
@@ -330,23 +330,20 @@ Team LaptopHulp NL`;
               placeholder="Hoofdstraat" error={errors.straatnaam}/>
           </Field>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
-            <Field label="Huisnummer *" hint="Cijfers, eventueel -A bijv. 36 of 36-A" error={errors.huisnummer}>
+            <Field label="Huisnummer *" hint="Bijv. 36, 36-A of 7-2" error={errors.huisnummer}>
               <Inp value={form.huisnummer}
                 onChange={v => {
-                  // Allow digits only, or digits-letters (e.g. 36 or 36-A)
-                  // Remove anything that's not digit, dash, or letter
-                  let clean = v.replace(/[^0-9A-Za-z\-]/g,"");
-                  // Extract parts: digits, optional dash+letters
+                  // Allow: digits, dash, digits or letters after dash
+                  // Valid: 36, 36-A, 36-AB, 7-2, 7-2A
+                  const clean = v.replace(/[^0-9A-Za-z\-]/g,"");
                   const numPart = clean.replace(/[^0-9]/g,"").slice(0,6);
-                  const rest    = clean.replace(/^[0-9]*/,""); // everything after digits
-                  let sufPart   = rest.replace(/[^A-Za-z\-]/g,"");
-                  // Ensure dash before letters
+                  const rest    = clean.replace(/^[0-9]*/,"");
+                  let sufPart   = rest.replace(/[^A-Za-z0-9\-]/g,"");
                   if (sufPart && !sufPart.startsWith("-")) sufPart = "-" + sufPart;
-                  // Keep only -X or -XX
-                  sufPart = sufPart.slice(0,3).toUpperCase(); // max "-AB"
+                  sufPart = sufPart.slice(0,4).toUpperCase();
                   upd("huisnummer", numPart + sufPart);
                 }}
-                placeholder="36 of 36-A" error={errors.huisnummer}/>
+                placeholder="36 of 36-A of 7-2" error={errors.huisnummer}/>
             </Field>
             <Field label="Postcode *" hint="4 cijfers + 2 letters" error={errors.postcode}>
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
