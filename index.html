@@ -471,7 +471,7 @@ Team LaptopHulp NL`;
       );
     }
 
-    function AdminPanels({cycleOpen,setCycleOpen,cycleStart,setCycleStart,cycleEnd,setCycleEnd,devices,setDevices,thankYou,setThankYou,submissions}) {
+    function AdminPanels({cycleOpen,setCycleOpen,cycleStart,setCycleStart,cycleEnd,setCycleEnd,devices,setDevices,thankYou,setThankYou,submissions,allowMultiAddr,setAllowMultiAddr,exemptAddrs,setExemptAddrs}) {
       const [newLabel,setNewLabel]=useState("");
       const [newIcon,setNewIcon]=useState("📦");
       const [tab,setTab]=useState("cycle");
@@ -483,7 +483,7 @@ Team LaptopHulp NL`;
       return (
         <div style={C.panel}>
           <div style={{display:"flex",borderBottom:"1px solid #e2e8f0"}}>
-            {[["cycle","📅 Cyclus"],["devices","🖥 Apparaten"],["message","✉ Bericht"],["export","📥 Export"]].map(([k,l])=>(
+            {[["cycle","📅 Cyclus"],["devices","🖥 Apparaten"],["address","🏠 Adressen"],["message","✉ Bericht"],["export","📥 Export"]].map(([k,l])=>(
               <button key={k} onClick={()=>setTab(k)} style={{
                 flex:1,padding:"12px 6px",border:"none",background:"none",cursor:"pointer",
                 fontWeight:tab===k?700:400,fontSize:12,
@@ -540,6 +540,40 @@ Team LaptopHulp NL`;
                     style={{flex:1,padding:"8px 10px",borderRadius:8,border:"1px solid #bfdbfe",fontSize:14,background:"#eff6ff"}}/>
                   <button onClick={addDevice} style={{padding:"8px 14px",borderRadius:8,border:"none",background:"#1d4ed8",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}}>+ Voeg toe</button>
                 </div>
+              </div>
+            )}
+            {tab==="address"&&(
+              <div>
+                {/* Toggle multi-address */}
+                <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:20,flexWrap:"wrap"}}>
+                  <span style={{fontSize:15,fontWeight:600,color:"#374151"}}>Meerdere registraties per adres:</span>
+                  <button onClick={()=>setAllowMultiAddr(p=>!p)} style={{
+                    padding:"8px 20px",borderRadius:9,border:"none",cursor:"pointer",fontWeight:700,fontSize:14,
+                    background:allowMultiAddr?"#16a34a":"#dc2626",color:"#fff",
+                  }}>{allowMultiAddr?"🟢 TOEGESTAAN":"🔴 GEBLOKKEERD"}</button>
+                  <span style={{fontSize:13,color:"#64748b"}}>
+                    {allowMultiAddr?"Meerdere personen per adres mogen zich aanmelden":"Één aanmelding per adres toegestaan"}
+                  </span>
+                </div>
+                <div style={{...C.info,marginBottom:16}}>
+                  🏠 Adressen in de uitzonderingslijst zijn altijd toegestaan, ongeacht de instelling hierboven (bijv. opvanghuizen, zorginstellingen).
+                </div>
+                {/* Exempt addresses list */}
+                <label style={{...C.label,marginBottom:8}}>Uitgezonderde adressen (altijd toegestaan):</label>
+                {exemptAddrs.map((addr,i)=>(
+                  <div key={i} style={{display:"flex",gap:8,marginBottom:8,alignItems:"center"}}>
+                    <input value={addr} onChange={e=>{
+                      const updated=[...exemptAddrs]; updated[i]=e.target.value; setExemptAddrs(updated);
+                    }} style={{flex:1,padding:"8px 10px",borderRadius:8,border:"1px solid #e2e8f0",fontSize:14,background:"#f8fafc"}}
+                    placeholder="bijv. Hoofdstraat 1"/>
+                    <button onClick={()=>setExemptAddrs(exemptAddrs.filter((_,j)=>j!==i))} style={{
+                      padding:"6px 10px",borderRadius:8,border:"none",background:"#fee2e2",color:"#dc2626",fontSize:14,cursor:"pointer",fontWeight:700,
+                    }}>🗑</button>
+                  </div>
+                ))}
+                <button onClick={()=>setExemptAddrs(p=>[...p,""])} style={{
+                  padding:"8px 16px",borderRadius:8,border:"none",background:"#1d4ed8",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",marginTop:4,
+                }}>+ Adres toevoegen</button>
               </div>
             )}
             {tab==="message"&&(
@@ -604,6 +638,8 @@ Team LaptopHulp NL`;
       const [cycleEnd,setCycleEnd]     = useState("");
       const [devices,setDevices]       = useState(DEFAULT_DEVICES);
       const [thankYou,setThankYou]     = useState(DEFAULT_THANK_YOU);
+      const [allowMultiAddr,setAllowMultiAddr] = useState(false);
+      const [exemptAddrs,setExemptAddrs]       = useState([]);
       const [showAdmin,setShowAdmin]   = useState(false);
       const [step,setStep]     = useState(1);
       const [errors,setErrors] = useState({});
@@ -662,11 +698,13 @@ Team LaptopHulp NL`;
             const result=lookupPerson(db.rows,form.voornaam,form.achternaam,form.geb_dag,form.geb_maand,form.geb_jaar);
             if(result.status==="received" && result.monthsAgo<36){
               const ds=result.date?result.date.toLocaleDateString("nl-NL"):"onbekend";
-              setBlocked({type:"received_recent",message:`U heeft op ${ds} al een apparaat ontvangen. U kunt zich pas na 3 jaar opnieuw aanmelden.`}); return;
+              const eligible=result.date?new Date(result.date.getFullYear()+3,result.date.getMonth(),result.date.getDate()).toLocaleDateString("nl-NL"):"";
+              setBlocked({type:"received_recent",message:`U heeft op ${ds} al een apparaat ontvangen. U kunt zich pas na ${eligible} opnieuw aanmelden.`}); return;
             }
             if(result.status==="not_received" && result.monthsAgo<6){
               const ds=result.date?result.date.toLocaleDateString("nl-NL"):"onbekend";
-              setBlocked({type:"not_received",message:`U bent op ${ds} geselecteerd maar heeft het apparaat niet opgehaald. U kunt zich pas na 6 maanden opnieuw aanmelden.`}); return;
+              const eligible=result.date?new Date(result.date.getFullYear(),result.date.getMonth()+6,result.date.getDate()).toLocaleDateString("nl-NL"):"";
+              setBlocked({type:"not_received",message:`U bent op ${ds} geselecteerd maar heeft het apparaat niet opgehaald. U kunt zich pas na ${eligible} opnieuw aanmelden.`}); return;
             }
             const csDate=cycleStart?new Date(cycleStart):null;
             const ceDate=cycleEnd?new Date(cycleEnd):null;
@@ -682,7 +720,39 @@ Team LaptopHulp NL`;
           }
         }
         else if(step===2) errs=v2(form);
-        else if(step===3) errs=v3(form,addrOk);
+        else if(step===3){
+          errs=v3(form,addrOk);
+          // Check address duplicate if no other errors and addrOk
+          if(!Object.keys(errs).length && addrOk && db && !allowMultiAddr){
+            const adresInput = (form.straatnaam + " " + form.huisnummer).trim().toLowerCase();
+            // Check if this address is in exempt list
+            const isExempt = exemptAddrs.some(e => {
+              const en = e.trim().toLowerCase();
+              return en && adresInput.includes(en);
+            });
+            if(!isExempt){
+              // Check if same address already in DB
+              const addrDup = db.rows.some(r => {
+                const rAddr = (String(r.adres||"")).trim().toLowerCase();
+                const rStraat = (String(r.straatnaam||r.voornaam||"")).trim().toLowerCase();
+                // Match straatnaam + huisnummer from DB
+                const dbAddr = (String(r.adres||"")).toLowerCase();
+                return dbAddr && dbAddr.includes(form.straatnaam.toLowerCase()) &&
+                       dbAddr.includes(form.huisnummer.toLowerCase());
+              });
+              // Also check current session submissions
+              const sessionDup = submissions.some(s =>
+                s.straatnaam.toLowerCase()===form.straatnaam.toLowerCase() &&
+                s.huisnummer.toLowerCase()===form.huisnummer.toLowerCase()
+              );
+              if(addrDup || sessionDup){
+                setBlocked({type:"same_cycle",
+                  message:"Er is al een aanmelding geregistreerd voor dit adres. Neem contact op met onze organisatie als u denkt dat dit een fout is."});
+                return;
+              }
+            }
+          }
+        }
         else if(step===4) errs=v4(form);
         else if(step===5){
           errs=v5(form);
@@ -726,7 +796,7 @@ Team LaptopHulp NL`;
             {submissions.length>0&&<button style={{...C.adminBtn,background:"#16a34a"}} onClick={()=>exportCSV(submissions)}>📥 Export ({submissions.length})</button>}
           </div>
 
-          {showAdmin&&<AdminPanels {...{cycleOpen,setCycleOpen,cycleStart,setCycleStart,cycleEnd,setCycleEnd,devices,setDevices,thankYou,setThankYou,submissions}}/>}
+          {showAdmin&&<AdminPanels {...{cycleOpen,setCycleOpen,cycleStart,setCycleStart,cycleEnd,setCycleEnd,devices,setDevices,thankYou,setThankYou,submissions,allowMultiAddr,setAllowMultiAddr,exemptAddrs,setExemptAddrs}}/>}
 
           <div style={C.card}>
             <CardHeader/>
