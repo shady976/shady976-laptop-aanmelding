@@ -185,10 +185,19 @@ Team LaptopHulp NL`;
           }};
         }
 
-        // Docs found but postcode doesn't match → tell user correct postcode
-        const correctPC = docs.find(d => Number(d.huisnummer) === hnNum)?.postcode
-                       || docs[0]?.postcode || "";
-        return {ok:false, error:`Postcode klopt niet voor dit adres. Correcte postcode: ${correctPC}`};
+        // Docs found but postcode doesn't match → search by street+number to find correct postcode
+        const q2   = encodeURIComponent(`${straat} ${hnNum}`);
+        const url2 = `https://api.pdok.nl/bzk/locatieserver/search/v3_1/free?q=${q2}&fq=type:adres&rows=10`;
+        const r2   = await fetch(url2);
+        if (r2.ok) {
+          const d2    = await r2.json();
+          const docs2 = d2?.response?.docs || [];
+          const exact = docs2.find(d => Number(d.huisnummer) === hnNum);
+          if (exact?.postcode) {
+            return {ok:false, error:`Postcode klopt niet voor dit adres. Correcte postcode: ${exact.postcode}`};
+          }
+        }
+        return {ok:false, error:`Postcode klopt niet voor dit adres`};
 
       } catch(err) {
         return {ok:false, error:"Adrescontrole niet beschikbaar (geen verbinding met PDOK)"};
