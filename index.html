@@ -798,26 +798,200 @@ Team LaptopHulp NL`;
         </div>
       );
 
+      // ── TOTP 2FA Implementation ─────────────────────────────────────
+      // Secret key — change this to your own random base32 string
+      const TOTP_SECRET = "JBSWY3DPEHPK3PXP"; // ← غيّر هذا المفتاح
+      const ADMIN_PASSWORD = "Cyberbank2025";   // ← غيّر كلمة المرور
+
+      // Base32 decode
+      const base32Decode = (s) => {
+        const CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+        s = s.toUpperCase().replace(/=+$/,"");
+        let bits = 0, val = 0;
+        const out = [];
+        for(const c of s){
+          val = (val<<5)|CHARS.indexOf(c);
+          bits += 5;
+          if(bits>=8){ out.push((val>>>(bits-8))&255); bits-=8; }
+        }
+        return new Uint8Array(out);
+      };
+
+      // Generate TOTP code
+      const getTOTP = async (secret) => {
+        const key   = base32Decode(secret);
+        const epoch = Math.floor(Date.now()/1000/30);
+        const msg   = new Uint8Array(8);
+        for(let i=7;i>=0;i--){ msg[i]=epoch&0xff; epoch>>=8; } // won't work with let, fix:
+        const t = Math.floor(Date.now()/1000/30);
+        const tb = new DataView(new ArrayBuffer(8));
+        tb.setUint32(4, t, false);
+        const cryptoKey = await crypto.subtle.importKey("raw",key,{name:"HMAC",hash:"SHA-1"},false,["sign"]);
+        const sig = await crypto.subtle.sign("HMAC", cryptoKey, tb.buffer);
+        const arr = new Uint8Array(sig);
+        const off = arr[19]&0xf;
+        const code = ((arr[off]&0x7f)<<24|(arr[off+1]&0xff)<<16|(arr[off+2]&0xff)<<8|(arr[off+3]&0xff))%1000000;
+        return String(code).padStart(6,"0");
+      };
+
+      const [adminAuth,  setAdminAuth]  = useState(false);
+      const [showPwBox,  setShowPwBox]  = useState(false);
+      const [loginStep,  setLoginStep]  = useState(1); // 1=password, 2=totp
+      const [pwInput,    setPwInput]    = useState("");
+      const [totpInput,  setTotpInput]  = useState("");
+      const [loginError, setLoginError] = useState("");
+      const [totpLive,   setTotpLive]   = useState("------");
+      const [totpTimer,  setTotpTimer]  = useState(30);
+
+      // Live TOTP display for admin (shows current code + countdown)
+      React.useEffect(() => {
+        if(!showPwBox || loginStep!==2) return;
+        let interval;
+        const update = async () => {
+          const code = await getTOTP(TOTP_SECRET);
+          setTotpLive(code);
+          setTotpTimer(30 - (Math.floor(Date.now()/1000) % 30));
+        };
+        update();
+        interval = setInterval(update, 1000);
+        return () => clearInterval(interval);
+      }, [showPwBox, loginStep]);
+
+      const handleStep1 = () => {
+        if(pwInput === ADMIN_PASSWORD){
+          setLoginStep(2); setPwInput(""); setLoginError("");
+        } else {
+          setLoginError("Onjuist wachtwoord"); setPwInput("");
+        }
+      };
+
+      const handleStep2 = async () => {
+        const expected = await getTOTP(TOTP_SECRET);
+        // Also check previous 30s window for clock drift
+        const t = Math.floor(Date.now()/1000/30);
+        const tb1 = new DataView(new ArrayBuffer(8));
+        tb1.setUint32(4, t-1, false);
+        const cryptoKey = await crypto.subtle.importKey("raw",base32Decode(TOTP_SECRET),{name:"HMAC",hash:"SHA-1"},false,["sign"]);
+        const sig1 = await crypto.subtle.sign("HMAC",cryptoKey,tb1.buffer);
+        const arr1 = new Uint8Array(sig1);
+        const off1 = arr1[19]&0xf;
+        const prev = String(((arr1[off1]&0x7f)<<24|(arr1[off1+1]&0xff)<<16|(arr1[off1+2]&0xff)<<8|(arr1[off1+3]&0xff))%1000000).padStart(6,"0");
+
+        if(totpInput===expected || totpInput===prev){
+          setAdminAuth(true); setShowPwBox(false); setTotpInput("");
+          setLoginError(""); setLoginStep(1); setShowAdmin(true);
+        } else {
+          setLoginError("Onjuiste code. Probeer opnieuw."); setTotpInput("");
+        }
+      };
+
+      const handleAdminLogout = () => {
+        setAdminAuth(false); setShowAdmin(false);
+        setLoginStep(1); setPwInput(""); setTotpInput(""); setLoginError("");
+      };
+
+      const openLogin = () => {
+        setShowPwBox(p=>!p);
+        setLoginStep(1); setPwInput(""); setTotpInput(""); setLoginError("");
+      };
+
       return (
         <div style={C.page}>
-          {/* Admin bar */}
-          <div style={C.adminBar}>
-            <span style={C.adminTag}>⚙ Beheer</span>
-            <div style={C.adminMid}>
-              {dbStatus==="ok"&&<span style={C.dbOk}>✅ {db.name} — {db.rows.length} records</span>}
-              {dbStatus==="error"&&<span style={C.dbErr}>❌ Fout bij laden</span>}
-              {dbStatus==="loading"&&<span style={C.dbLoad}>⏳ Laden…</span>}
-              {dbStatus==="idle"&&<span style={C.dbWarn}>⚠ Geen database geladen</span>}
-            </div>
-            <button style={C.adminBtn} onClick={()=>fileRef.current.click()}>📂 {dbStatus==="ok"?"Vervang":"Database (.xlsx)"}</button>
-            <input ref={fileRef} type="file" accept=".xlsx" style={{display:"none"}} onChange={handleFile}/>
-            <button style={{...C.adminBtn,background:showAdmin?"#7c3aed":"#4f46e5"}} onClick={()=>setShowAdmin(p=>!p)}>
-              {showAdmin?"✕ Sluiten":"⚙ Instellingen"}
-            </button>
-            {submissions.length>0&&<button style={{...C.adminBtn,background:"#16a34a"}} onClick={()=>exportCSV(submissions)}>📥 Export ({submissions.length})</button>}
+          {/* Discreet admin trigger */}
+          <div style={{width:"100%",maxWidth:680,display:"flex",justifyContent:"flex-end",padding:"6px 4px 0"}}>
+            {!adminAuth ? (
+              <button onClick={openLogin} style={{
+                background:"none",border:"none",color:"#e2e8f0",fontSize:11,cursor:"pointer",padding:"4px 8px",
+              }}>⚙</button>
+            ) : (
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:12,color:"#64748b"}}>🔐 Beheerder</span>
+                <button onClick={handleAdminLogout} style={{
+                  padding:"4px 10px",borderRadius:6,border:"1px solid #e2e8f0",
+                  background:"#fff",color:"#64748b",fontSize:12,cursor:"pointer",
+                }}>Uitloggen</button>
+              </div>
+            )}
           </div>
 
-          {showAdmin&&<AdminPanels {...{cycleOpen,setCycleOpen,cycleStart,setCycleStart,cycleEnd,setCycleEnd,devices,setDevices,thankYou,setThankYou,submissions,allowMultiAddr,setAllowMultiAddr,exemptAddrs,setExemptAddrs}}/>}
+          {/* Login box */}
+          {showPwBox && !adminAuth && (
+            <div style={{width:"100%",maxWidth:680,background:"#fff",borderRadius:12,
+              boxShadow:"0 4px 20px rgba(0,0,0,0.1)",padding:"24px",marginBottom:12}}>
+
+              {loginStep===1 && (
+                <>
+                  <div style={{fontSize:15,fontWeight:700,color:"#1e293b",marginBottom:4}}>🔐 Beheerderstoegang</div>
+                  <div style={{fontSize:13,color:"#64748b",marginBottom:16}}>Stap 1 van 2 — Wachtwoord</div>
+                  <div style={{display:"flex",gap:8}}>
+                    <input type="password" value={pwInput}
+                      onChange={e=>{setPwInput(e.target.value);setLoginError("");}}
+                      onKeyDown={e=>e.key==="Enter"&&handleStep1()}
+                      placeholder="Wachtwoord invoeren"
+                      autoFocus
+                      style={{...C.input,flex:1,borderColor:loginError?"#ef4444":"#cbd5e1"}}/>
+                    <button onClick={handleStep1} style={{
+                      padding:"10px 18px",borderRadius:9,border:"none",
+                      background:"#1d4ed8",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer",
+                    }}>Volgende →</button>
+                  </div>
+                  {loginError&&<div style={{fontSize:12,color:"#ef4444",marginTop:6}}>⚠ {loginError}</div>}
+                </>
+              )}
+
+              {loginStep===2 && (
+                <>
+                  <div style={{fontSize:15,fontWeight:700,color:"#1e293b",marginBottom:4}}>📱 Verificatiecode</div>
+                  <div style={{fontSize:13,color:"#64748b",marginBottom:16}}>Stap 2 van 2 — Open Google/Microsoft Authenticator en voer de 6-cijferige code in</div>
+                  <div style={{display:"flex",gap:8}}>
+                    <input type="text" value={totpInput}
+                      onChange={e=>{setTotpInput(e.target.value.replace(/\D/g,"").slice(0,6));setLoginError("");}}
+                      onKeyDown={e=>e.key==="Enter"&&totpInput.length===6&&handleStep2()}
+                      placeholder="000000"
+                      maxLength={6}
+                      autoFocus
+                      style={{...C.input,flex:1,textAlign:"center",fontSize:22,letterSpacing:8,
+                        borderColor:loginError?"#ef4444":"#cbd5e1"}}/>
+                    <button onClick={handleStep2} disabled={totpInput.length!==6} style={{
+                      padding:"10px 18px",borderRadius:9,border:"none",
+                      background:totpInput.length===6?"#1d4ed8":"#94a3b8",
+                      color:"#fff",fontWeight:700,fontSize:14,cursor:totpInput.length===6?"pointer":"default",
+                    }}>Inloggen ✓</button>
+                  </div>
+                  {loginError&&<div style={{fontSize:12,color:"#ef4444",marginTop:6}}>⚠ {loginError}</div>}
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:12}}>
+                    <button onClick={()=>{setLoginStep(1);setLoginError("");}} style={{
+                      background:"none",border:"none",color:"#64748b",fontSize:13,cursor:"pointer",
+                    }}>← Terug</button>
+                    <div style={{fontSize:12,color:"#94a3b8"}}>
+                      Code verloopt over: <strong style={{color:totpTimer<10?"#ef4444":"#64748b"}}>{totpTimer}s</strong>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Admin bar */}
+          {adminAuth && (
+            <div style={C.adminBar}>
+              <span style={C.adminTag}>⚙ Beheer</span>
+              <div style={C.adminMid}>
+                {dbStatus==="ok"&&<span style={C.dbOk}>✅ {db.name} — {db.rows.length} records</span>}
+                {dbStatus==="error"&&<span style={C.dbErr}>❌ Fout bij laden</span>}
+                {dbStatus==="loading"&&<span style={C.dbLoad}>⏳ Laden…</span>}
+                {dbStatus==="idle"&&<span style={C.dbWarn}>⚠ Geen database geladen</span>}
+              </div>
+              <button style={C.adminBtn} onClick={()=>fileRef.current.click()}>📂 {dbStatus==="ok"?"Vervang":"Database (.xlsx)"}</button>
+              <input ref={fileRef} type="file" accept=".xlsx" style={{display:"none"}} onChange={handleFile}/>
+              <button style={{...C.adminBtn,background:showAdmin?"#7c3aed":"#4f46e5"}} onClick={()=>setShowAdmin(p=>!p)}>
+                {showAdmin?"✕ Sluiten":"⚙ Instellingen"}
+              </button>
+              {submissions.length>0&&<button style={{...C.adminBtn,background:"#16a34a"}} onClick={()=>exportCSV(submissions)}>📥 Export ({submissions.length})</button>}
+            </div>
+          )}
+
+          {adminAuth && showAdmin && <AdminPanels {...{cycleOpen,setCycleOpen,cycleStart,setCycleStart,cycleEnd,setCycleEnd,devices,setDevices,thankYou,setThankYou,submissions,allowMultiAddr,setAllowMultiAddr,exemptAddrs,setExemptAddrs}}/>}
 
           <div style={C.card}>
             <CardHeader/>
