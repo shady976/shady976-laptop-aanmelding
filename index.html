@@ -28,7 +28,6 @@
       { id:"2", label:"Tablet",   icon:"📱", enabled:true },
       { id:"3", label:"Telefoon", icon:"📞", enabled:false },
     ];
-    const NOT_RECEIVED_KEYWORDS = ["niet gekomen","geen afspraak","wil geen laptop meer"];
     const DEFAULT_THANK_YOU = `Beste {voornaam},
 
 Hartelijk dank voor uw aanmelding bij LaptopHulp NL.
@@ -61,10 +60,14 @@ Team LaptopHulp NL`;
       return (now.getFullYear() - date.getFullYear()) * 12 + (now.getMonth() - date.getMonth());
     }
 
-    function isNotReceived(serial) {
-      if (!serial || String(serial).trim() === "") return true;
-      const s = String(serial).trim().toLowerCase();
-      return NOT_RECEIVED_KEYWORDS.some(k => s.includes(k));
+    // 000000 = selected but not received
+    // Real serial (not empty, not 000000) = received device
+    // Empty or anything else = treat as no record (allow registration)
+    function serialStatus(serial) {
+      const s = String(serial||"").trim();
+      if (s === "000000") return "not_received";
+      if (s === "" || s === "nan") return "unknown";
+      return "received";
     }
 
     function lookupPerson(rows, voornaam, achternaam, dag, maand, jaar) {
@@ -75,16 +78,31 @@ Team LaptopHulp NL`;
         String(r.jaar||"").replace(/\.0$/,"") === String(jaar)
       );
       if (matches.length === 0) return { status:"none" };
+
+      // Check all matches — prioritize received status
       for (const r of matches) {
-        if (!isNotReceived(r.serienummer)) {
+        const ss = serialStatus(r.serienummer);
+        if (ss === "received") {
           const date = parseDate(r.uitdelen_datum);
           const ago  = date ? monthsDiff(date) : 999;
           return { status:"received", date, monthsAgo: ago };
         }
       }
-      const date = parseDate(matches[0].uitdelen_datum);
-      const ago  = date ? monthsDiff(date) : 0;
-      return { status:"not_received", date, monthsAgo: ago };
+
+      // Check for 000000 (selected but not received)
+      for (const r of matches) {
+        const ss = serialStatus(r.serienummer);
+        if (ss === "not_received") {
+          const date = parseDate(r.uitdelen_datum);
+          // If no date → allow immediately
+          if (!date) return { status:"none" };
+          const ago = monthsDiff(date);
+          return { status:"not_received", date, monthsAgo: ago };
+        }
+      }
+
+      // All matches have unknown serial (empty or other text) → allow
+      return { status:"none" };
     }
 
     function parseXLSXFile(file) {
