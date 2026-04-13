@@ -37,6 +37,17 @@ Wij hebben uw registratie ontvangen en zullen deze zo spoedig mogelijk verwerken
 Met vriendelijke groet,
 Team LaptopHulp NL`;
 
+    const DEFAULT_CONSENT_TEXT = `Wilt u meedoen aan de loting van deze maand? Dan vragen wij u om toestemming om uw gegevens op te slaan en te verwerken binnen Cybersoek. We delen uw gegevens nooit met derden.
+
+Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan krijgt u automatisch een melding met het verzoek om u in te schrijven voor de volgende maand.`;
+
+    const DEFAULT_CRITERIA = [
+      "Kom je uit Amsterdam?",
+      "Ben je 18 jaar of ouder?",
+      "Heb je een Stadspas?",
+      "Heb je de afgelopen drie jaar geen laptop van ons ontvangen? (Als dit langer dan drie jaar geleden is, mag je je opnieuw aanmelden.)",
+    ];
+
     const blockSymbols  = (v) => v.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ\s'-]/g,"");
     const onlyLetters   = (v) => /^[A-Za-zÀ-ÖØ-öø-ÿ\s'-]+$/.test(v.trim()) && v.trim().length > 0;
     // Dutch tussenvoegsels that are allowed to be short
@@ -534,7 +545,7 @@ Team LaptopHulp NL`;
       );
     }
 
-    function AdminPanels({cycleOpen,setCycleOpen,cycleStart,setCycleStart,cycleEnd,setCycleEnd,devices,setDevices,thankYou,setThankYou,submissions,allowMultiAddr,setAllowMultiAddr,exemptAddrs,setExemptAddrs}) {
+    function AdminPanels({cycleOpen,setCycleOpen,cycleStart,setCycleStart,cycleEnd,setCycleEnd,devices,setDevices,thankYou,setThankYou,submissions,allowMultiAddr,setAllowMultiAddr,exemptAddrs,setExemptAddrs,consentText,setConsentText,criteria,setCriteria}) {
       const [newLabel,setNewLabel]=useState("");
       const [newIcon,setNewIcon]=useState("📦");
       const [tab,setTab]=useState("cycle");
@@ -546,7 +557,7 @@ Team LaptopHulp NL`;
       return (
         <div style={C.panel}>
           <div style={{display:"flex",borderBottom:"1px solid #e2e8f0"}}>
-            {[["cycle","📅 Cyclus"],["devices","🖥 Apparaten"],["address","🏠 Adressen"],["message","✉ Bericht"],["export","📥 Export"]].map(([k,l])=>(
+            {[["cycle","📅 Cyclus"],["devices","🖥 Apparaten"],["address","🏠 Adressen"],["pages","📄 Pagina's"],["message","✉ Bericht"],["export","📥 Export"]].map(([k,l])=>(
               <button key={k} onClick={()=>setTab(k)} style={{
                 flex:1,padding:"12px 6px",border:"none",background:"none",cursor:"pointer",
                 fontWeight:tab===k?700:400,fontSize:12,
@@ -639,6 +650,38 @@ Team LaptopHulp NL`;
                 }}>+ Adres toevoegen</button>
               </div>
             )}
+            {tab==="pages"&&(
+              <div>
+                {/* Consent text */}
+                <div style={{marginBottom:24}}>
+                  <label style={{...C.label,fontSize:14,marginBottom:8,display:"block"}}>📋 Tekst toestemmingspagina</label>
+                  <textarea value={consentText} onChange={e=>setConsentText(e.target.value)}
+                    rows={6} style={{...C.input,resize:"vertical",fontFamily:"inherit",lineHeight:1.7,fontSize:13}}/>
+                  <button onClick={()=>setConsentText(DEFAULT_CONSENT_TEXT)}
+                    style={{marginTop:6,padding:"6px 14px",borderRadius:8,border:"1px solid #e2e8f0",background:"#fff",color:"#475569",fontSize:12,cursor:"pointer"}}>
+                    ↺ Standaard herstellen
+                  </button>
+                </div>
+                {/* Criteria */}
+                <div>
+                  <label style={{...C.label,fontSize:14,marginBottom:8,display:"block"}}>✅ Voorwaarden (kom jij in aanmerking?)</label>
+                  <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>Alle voorwaarden moeten met 'Ja' beantwoord worden om door te gaan.</div>
+                  {criteria.map((q,i)=>(
+                    <div key={i} style={{marginBottom:12}}>
+                      <div style={{fontSize:12,color:"#64748b",marginBottom:4}}>Voorwaarde {i+1}</div>
+                      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                        <input value={q} onChange={e=>{const u=[...criteria];u[i]=e.target.value;setCriteria(u);}}
+                          style={{flex:1,padding:"8px 10px",borderRadius:8,border:"1px solid #e2e8f0",fontSize:13,background:"#f8fafc"}}/>
+                      </div>
+                    </div>
+                  ))}
+                  <button onClick={()=>setCriteria(DEFAULT_CRITERIA)}
+                    style={{marginTop:4,padding:"6px 14px",borderRadius:8,border:"1px solid #e2e8f0",background:"#fff",color:"#475569",fontSize:12,cursor:"pointer"}}>
+                    ↺ Standaard herstellen
+                  </button>
+                </div>
+              </div>
+            )}
             {tab==="message"&&(
               <div>
                 <div style={{fontSize:13,color:"#475569",marginBottom:10}}>Gebruik <strong>{"{voornaam}"}</strong> voor de voornaam van de aanmelder.</div>
@@ -701,9 +744,17 @@ Team LaptopHulp NL`;
       const [cycleEnd,setCycleEnd]     = useState("");
       const [devices,setDevices]       = useState(DEFAULT_DEVICES);
       const [thankYou,setThankYou]     = useState(DEFAULT_THANK_YOU);
+      const [consentText,setConsentText] = useState(DEFAULT_CONSENT_TEXT);
+      const [criteria,setCriteria]       = useState(DEFAULT_CRITERIA);
       const [allowMultiAddr,setAllowMultiAddr] = useState(false);
       const [exemptAddrs,setExemptAddrs]       = useState([]);
       const [showAdmin,setShowAdmin]   = useState(false);
+
+      // Pre-form flow: "consent" → "criteria" → "form"
+      const [preStep,setPreStep] = useState("consent"); // consent | criteria | form
+      const [consentAnswer,setConsentAnswer] = useState(null); // true | false | null
+      const [criteriaAnswers,setCriteriaAnswers] = useState([null,null,null,null]);
+      const [preError,setPreError] = useState("");
       const [step,setStep]     = useState(1);
       const [errors,setErrors] = useState({});
       const [blocked,setBlocked] = useState(null);
@@ -838,7 +889,7 @@ Team LaptopHulp NL`;
         setStep(s=>s+1);
       };
 
-      const reset=()=>{setForm(EMPTY);setStep(1);setErrors({});setBlocked(null);setDone(false);setAddrOk(false);setAddrSt("idle");setAddrMsg("");};
+      const reset=()=>{setForm(EMPTY);setStep(1);setErrors({});setBlocked(null);setDone(false);setAddrOk(false);setAddrSt("idle");setAddrMsg("");setPreStep("consent");setConsentAnswer(null);setCriteriaAnswers([null,null,null,null]);setPreError("");};
 
       const CardHeader=()=>(
         <div style={{...C.header,position:"relative"}}>
@@ -957,7 +1008,7 @@ Team LaptopHulp NL`;
             </div>
           )}
 
-          {adminAuth && showAdmin && <AdminPanels {...{cycleOpen,setCycleOpen,cycleStart,setCycleStart,cycleEnd,setCycleEnd,devices,setDevices,thankYou,setThankYou,submissions,allowMultiAddr,setAllowMultiAddr,exemptAddrs,setExemptAddrs}}/>}
+          {adminAuth && showAdmin && <AdminPanels {...{cycleOpen,setCycleOpen,cycleStart,setCycleStart,cycleEnd,setCycleEnd,devices,setDevices,thankYou,setThankYou,submissions,allowMultiAddr,setAllowMultiAddr,exemptAddrs,setExemptAddrs,consentText,setConsentText,criteria,setCriteria}}/>}
 
           <div style={C.card}>
             <CardHeader/>
@@ -1018,7 +1069,94 @@ Team LaptopHulp NL`;
                 <div style={{fontSize:15,color:"#374151",lineHeight:1.7}}>De aanmeldingsperiode is momenteel gesloten.<br/>Kom later terug voor de volgende periode.</div>
                 {cycleStart&&cycleEnd&&<div style={{marginTop:16,fontSize:13,color:"#64748b"}}>Periode: {new Date(cycleStart).toLocaleDateString("nl-NL")} – {new Date(cycleEnd).toLocaleDateString("nl-NL")}</div>}
               </div>
-             ) : done ? <SuccessView form={form} devices={devices} thankYou={thankYou} onReset={reset}/> : (
+             ) : done ? <SuccessView form={form} devices={devices} thankYou={thankYou} onReset={reset}/> :
+
+             // ── Pre-form: Consent page ──
+             preStep==="consent" ? (
+              <div style={{padding:"32px 28px"}}>
+                <div style={{fontSize:18,fontWeight:700,color:"#1e293b",marginBottom:16}}>📋 Toestemming gegevensverwerking</div>
+                <div style={{fontSize:14,color:"#374151",lineHeight:1.8,marginBottom:24,whiteSpace:"pre-wrap"}}>{consentText}</div>
+                <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:16}}>
+                  {[{val:true,label:"✅ Ja, ik geef toestemming"},{val:false,label:"❌ Nee, ik geef geen toestemming"}].map(opt=>(
+                    <button key={String(opt.val)} onClick={()=>{setConsentAnswer(opt.val);setPreError("");}} style={{
+                      padding:"14px 20px",borderRadius:12,border:"2px solid",textAlign:"left",cursor:"pointer",fontSize:15,fontWeight:600,
+                      borderColor:consentAnswer===opt.val?(opt.val?"#16a34a":"#dc2626"):"#e2e8f0",
+                      background:consentAnswer===opt.val?(opt.val?"#f0fdf4":"#fff1f2"):"#fff",
+                      color:consentAnswer===opt.val?(opt.val?"#15803d":"#dc2626"):"#374151",
+                    }}>{opt.label}</button>
+                  ))}
+                </div>
+                {preError&&<div style={{fontSize:13,color:"#ef4444",marginBottom:12}}>⚠ {preError}</div>}
+                {consentAnswer===false&&(
+                  <div style={{background:"#fff1f2",border:"1px solid #fecaca",borderRadius:10,padding:"14px",fontSize:14,color:"#dc2626",marginBottom:16}}>
+                    Helaas kunt u niet verder zonder toestemming te geven voor de verwerking van uw gegevens.
+                  </div>
+                )}
+                <button onClick={()=>{
+                  if(consentAnswer===null){setPreError("Maak een keuze om verder te gaan.");return;}
+                  if(consentAnswer===false) return;
+                  setPreStep("criteria"); setPreError("");
+                }} disabled={consentAnswer!==true} style={{
+                  padding:"12px 28px",borderRadius:9,border:"none",fontWeight:700,fontSize:15,cursor:consentAnswer===true?"pointer":"default",
+                  background:consentAnswer===true?"#1d4ed8":"#94a3b8",color:"#fff",
+                }}>Volgende →</button>
+              </div>
+             ) :
+
+             // ── Pre-form: Criteria page ──
+             preStep==="criteria" ? (
+              <div style={{padding:"32px 28px"}}>
+                <div style={{fontSize:18,fontWeight:700,color:"#1e293b",marginBottom:8}}>✅ Kom jij in aanmerking?</div>
+                <div style={{fontSize:14,color:"#64748b",marginBottom:20}}>Beantwoord alle vragen met 'Ja' om verder te gaan.</div>
+                {criteria.map((q,i)=>(
+                  <div key={i} style={{marginBottom:20}}>
+                    <div style={{fontSize:14,fontWeight:600,color:"#1e293b",marginBottom:10}}>
+                      {i+1}. {q}
+                    </div>
+                    <div style={{display:"flex",gap:10}}>
+                      {["Ja","Nee"].map(opt=>{
+                        const selected = criteriaAnswers[i]===(opt==="Ja");
+                        const isCorrect = opt==="Ja"; // all must be Ja
+                        return(
+                          <button key={opt} onClick={()=>{
+                            const updated=[...criteriaAnswers]; updated[i]=(opt==="Ja"); setCriteriaAnswers(updated); setPreError("");
+                          }} style={{
+                            padding:"10px 24px",borderRadius:9,border:"2px solid",cursor:"pointer",fontSize:14,fontWeight:700,
+                            borderColor:selected?(isCorrect?"#16a34a":"#dc2626"):"#e2e8f0",
+                            background:selected?(isCorrect?"#f0fdf4":"#fff1f2"):"#fff",
+                            color:selected?(isCorrect?"#15803d":"#dc2626"):"#374151",
+                          }}>{opt}</button>
+                        );
+                      })}
+                    </div>
+                    {criteriaAnswers[i]===false&&(
+                      <div style={{fontSize:12,color:"#dc2626",marginTop:6}}>
+                        ⚠ Helaas voldoet u niet aan deze voorwaarde.
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {preError&&<div style={{fontSize:13,color:"#ef4444",marginBottom:12}}>⚠ {preError}</div>}
+                {criteriaAnswers.some(a=>a===false)&&(
+                  <div style={{background:"#fff1f2",border:"1px solid #fecaca",borderRadius:10,padding:"14px",fontSize:14,color:"#dc2626",marginBottom:16}}>
+                    Helaas komt u niet in aanmerking voor een apparaat van Cyberbank. Heeft u vragen? Neem contact op met onze organisatie.
+                  </div>
+                )}
+                <div style={{display:"flex",gap:12,marginTop:8}}>
+                  <button onClick={()=>{setPreStep("consent");setPreError("");}} style={{
+                    padding:"12px 20px",borderRadius:9,border:"1.5px solid #e2e8f0",background:"#fff",color:"#475569",fontSize:14,fontWeight:600,cursor:"pointer",
+                  }}>← Terug</button>
+                  <button onClick={()=>{
+                    if(criteriaAnswers.some(a=>a===null)){setPreError("Beantwoord alle vragen om verder te gaan.");return;}
+                    if(criteriaAnswers.some(a=>a===false)){setPreError("U kunt niet verder omdat u niet aan alle voorwaarden voldoet.");return;}
+                    setPreStep("form"); setPreError("");
+                  }} style={{
+                    padding:"12px 28px",borderRadius:9,border:"none",fontWeight:700,fontSize:15,cursor:"pointer",
+                    background:"#1d4ed8",color:"#fff",
+                  }}>Verder met aanmelden →</button>
+                </div>
+              </div>
+             ) : (
               <>
                 {cycleStart&&cycleEnd&&(
                   <div style={{background:"#f0fdf4",borderBottom:"1px solid #bbf7d0",padding:"8px 32px",fontSize:13,color:"#15803d",fontWeight:600}}>
