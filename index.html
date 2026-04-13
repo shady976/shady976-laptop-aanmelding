@@ -452,15 +452,93 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
       );
     }
 
-    function Step4({form,upd,errors}) {
+    // ── Intersolve Stadspas API ───────────────────────────────────────
+    // ↓ Vervang deze waarden wanneer u de API-gegevens ontvangt van Intersolve
+    const INTERSOLVE_API_URL = "JOUW_API_URL_HIER";  // ← API endpoint URL
+    const INTERSOLVE_USERNAME = "JOUW_USERNAME_HIER"; // ← Gebruikersnaam
+    const INTERSOLVE_PASSWORD = "JOUW_PASSWORD_HIER"; // ← Wachtwoord / API key
+    const INTERSOLVE_ENABLED  = false; // ← Zet op TRUE wanneer API gereed is
+
+    async function checkStadspas(stadspasNummer) {
+      // Als API nog niet geconfigureerd is, sla verificatie over
+      if (!INTERSOLVE_ENABLED) return { ok:true, status:"unknown", message:"" };
+
+      try {
+        const response = await fetch(INTERSOLVE_API_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Basic " + btoa(INTERSOLVE_USERNAME + ":" + INTERSOLVE_PASSWORD),
+          },
+          body: JSON.stringify({ kaartnummer: stadspasNummer }),
+        });
+
+        if (!response.ok) return { ok:false, status:"error", message:"Verbinding met Stadspas verificatie mislukt" };
+
+        const data = await response.json();
+
+        // Pas onderstaande logica aan op basis van de API documentatie van Intersolve
+        const status = data.status || data.kaartStatus || "";
+
+        if (status === "geblokkeerd") {
+          return { ok:false, status:"geblokkeerd", message:"Uw Stadspas is geblokkeerd. Neem contact op met de gemeente Amsterdam." };
+        }
+        if (status === "verlopen") {
+          return { ok:false, status:"verlopen", message:"Uw Stadspas is verlopen. Vernieuw uw pas via de gemeente Amsterdam." };
+        }
+        if (status === "niet gevonden" || status === "ongeldig") {
+          return { ok:false, status:"ongeldig", message:"Dit is geen geldig kaartnummer van de Stadspas Amsterdam." };
+        }
+
+        // Controleer op Cyberbank aanbieding
+        const heeftCyberbankAanbieding = data.aanbiedingen?.some(a =>
+          a.naam?.toLowerCase().includes("cyberbank")
+        ) || false;
+
+        if (!heeftCyberbankAanbieding) {
+          return { ok:false, status:"geen_aanbieding", message:"Uw Stadspas heeft geen actieve Cyberbank aanbieding. U bent mogelijk al eerder geselecteerd." };
+        }
+
+        return { ok:true, status:"actief", message:"✅ Stadspas is actief en geldig" };
+
+      } catch(err) {
+        return { ok:false, status:"error", message:"Stadspas verificatie niet beschikbaar. Probeer opnieuw." };
+      }
+    }
+
+    function Step4({form,upd,errors,stadspasStatus,stadspasChecking,onCheckStadspas}) {
       const count=form.stadspas.replace(/\D/g,"").length;
       const valid=count===19&&form.stadspas.startsWith("606");
       return (
         <div>
           <Field label="Stadspas nummer *" hint="Exact 19 cijfers — begint met 606" error={errors.stadspas}>
-            <Inp value={form.stadspas} onChange={v=>upd("stadspas",v.replace(/\D/g,"").slice(0,19))} placeholder="606XXXXXXXXXXXXXXXX" maxLength={19} error={errors.stadspas}/>
+            <Inp value={form.stadspas} onChange={v=>{upd("stadspas",v.replace(/\D/g,"").slice(0,19));}} placeholder="606XXXXXXXXXXXXXXXX" maxLength={19} error={errors.stadspas}/>
             <div style={{...C.counter,color:valid?"#22c55e":"#94a3b8"}}>{count}/19{valid?" ✓":""}</div>
           </Field>
+
+          {/* Intersolve verificatie knop — alleen tonen als API enabled */}
+          {INTERSOLVE_ENABLED && valid && (
+            <div style={{marginTop:8,marginBottom:8}}>
+              <button onClick={onCheckStadspas} disabled={stadspasChecking} style={{
+                padding:"10px 20px",borderRadius:9,border:"none",cursor:"pointer",fontWeight:700,fontSize:14,
+                background: stadspasStatus?.ok ? "#16a34a" : stadspasChecking ? "#94a3b8" : "#1d4ed8",
+                color:"#fff",opacity:stadspasChecking?0.7:1,
+              }}>
+                {stadspasChecking ? "⏳ Controleren…" : stadspasStatus?.ok ? "✅ Stadspas geverifieerd" : "🔍 Stadspas controleren"}
+              </button>
+            </div>
+          )}
+
+          {/* Status bericht */}
+          {stadspasStatus && (
+            <div style={{
+              padding:"10px 14px",borderRadius:9,fontSize:13,marginBottom:6,
+              background: stadspasStatus.ok ? "#f0fdf4" : "#fff7ed",
+              border:`1px solid ${stadspasStatus.ok ? "#86efac" : "#fed7aa"}`,
+              color: stadspasStatus.ok ? "#15803d" : "#c2410c",
+            }}>{stadspasStatus.message}</div>
+          )}
+
           <div style={C.info}>🪪 Uw Stadspas bevestigt dat u in aanmerking komt voor dit programma.</div>
         </div>
       );
@@ -817,6 +895,8 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
       const [addrStatus,setAddrSt] = useState("idle");
       const [addrMsg,setAddrMsg]   = useState("");
       const [addrOk,setAddrOk]     = useState(false);
+      const [stadspasStatus,setStadspasStatus] = useState(null);
+      const [stadspasChecking,setStadspasChecking] = useState(false);
 
       const upd = (f,v) => {
         setForm(p=>({...p,[f]:v}));
@@ -824,6 +904,14 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
         if(["straatnaam","huisnummer"].includes(f)){
           setAddrOk(false); setAddrSt("idle"); setAddrMsg("");
         }
+        if(f==="stadspas") setStadspasStatus(null);
+      };
+
+      const handleCheckStadspas = async () => {
+        setStadspasChecking(true); setStadspasStatus(null);
+        const result = await checkStadspas(form.stadspas);
+        setStadspasStatus(result);
+        setStadspasChecking(false);
       };
 
       const handleFile = async (e) => {
@@ -929,7 +1017,14 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
             }
           }
         }
-        else if(step===4) errs=v4(form);
+        else if(step===4){
+          errs=v4(form);
+          // If API enabled and stadspas not verified or failed → block
+          if(!Object.keys(errs).length && INTERSOLVE_ENABLED){
+            if(!stadspasStatus){ errs.stadspas="Controleer eerst uw Stadspas via de knop hieronder"; }
+            else if(!stadspasStatus.ok){ errs.stadspas=stadspasStatus.message; }
+          }
+        }
         else if(step===5){
           errs=v5(form);
           if(!Object.keys(errs).length){
@@ -946,7 +1041,7 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
         setStep(s=>s+1);
       };
 
-      const reset=()=>{setForm(EMPTY);setStep(1);setErrors({});setBlocked(null);setDone(false);setAddrOk(false);setAddrSt("idle");setAddrMsg("");setPreStep("consent");setConsentAnswer(null);setCriteriaAnswers([null,null,null,null]);setPreError("");setExtraPageIdx(0);setShowReview(false);setReviewConfirmed(false);};
+      const reset=()=>{setForm(EMPTY);setStep(1);setErrors({});setBlocked(null);setDone(false);setAddrOk(false);setAddrSt("idle");setAddrMsg("");setPreStep("consent");setConsentAnswer(null);setCriteriaAnswers([null,null,null,null]);setPreError("");setExtraPageIdx(0);setShowReview(false);setReviewConfirmed(false);setStadspasStatus(null);setStadspasChecking(false);};
 
       const CardHeader=()=>(
         <div style={{...C.header,position:"relative"}}>
@@ -1295,7 +1390,7 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
                   {step===1&&<Step1 form={form} upd={upd} errors={errors}/>}
                   {step===2&&<Step2 form={form} upd={upd} errors={errors}/>}
                   {step===3&&<Step3 form={form} upd={upd} errors={errors} addrStatus={addrStatus} addrMsg={addrMsg} addrOk={addrOk} onCheck={checkAddress}/>}
-                  {step===4&&<Step4 form={form} upd={upd} errors={errors}/>}
+                  {step===4&&<Step4 form={form} upd={upd} errors={errors} stadspasStatus={stadspasStatus} stadspasChecking={stadspasChecking} onCheckStadspas={handleCheckStadspas}/>}
                   {step===5&&<Step5 form={form} upd={upd} errors={errors} devices={devices}/>}
                 </div>
                 <div style={C.btnRow}>
