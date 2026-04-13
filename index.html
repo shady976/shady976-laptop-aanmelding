@@ -62,15 +62,15 @@ Team LaptopHulp NL`;
 
     // 000000 = selected but not received
     // Real serial number (alphanumeric, e.g. ZG092516H, 5K212378H) = received device
-    // Empty, nan, or any plain text (niet gekomen, wil geen laptop, etc.) = allow registration
+    // 000000 = selected but not received
+    // 111111 = manually excluded by admin
+    // Empty, nan, or any plain text = allow registration
     function serialStatus(serial) {
       const s = String(serial||"").trim();
       if (s === "" || s === "nan") return "unknown";
       if (s === "000000") return "not_received";
-      // Real serial: contains both letters and digits, typically 8-10 chars
-      // e.g. ZG092516H, 5K212378H, 3J088724H, FZQKTF2, C7SK8X2
+      if (s === "111111") return "excluded";
       if (/^[A-Z0-9]{5,12}$/i.test(s)) return "received";
-      // Anything else (text like "niet gekomen", "wil geen laptop", etc.) = unknown → allow
       return "unknown";
     }
 
@@ -82,6 +82,12 @@ Team LaptopHulp NL`;
         String(r.jaar||"").replace(/\.0$/,"") === String(jaar)
       );
       if (matches.length === 0) return { status:"none" };
+
+      // Check for manual exclusion first (111111)
+      for (const r of matches) {
+        if (serialStatus(r.serienummer) === "excluded")
+          return { status:"excluded" };
+      }
 
       // Check all matches — prioritize received status
       for (const r of matches) {
@@ -98,14 +104,13 @@ Team LaptopHulp NL`;
         const ss = serialStatus(r.serienummer);
         if (ss === "not_received") {
           const date = parseDate(r.uitdelen_datum);
-          // If no date → allow immediately
           if (!date) return { status:"none" };
           const ago = monthsDiff(date);
           return { status:"not_received", date, monthsAgo: ago };
         }
       }
 
-      // All matches have unknown serial (empty or other text) → allow
+      // All matches have unknown serial → allow
       return { status:"none" };
     }
 
@@ -231,9 +236,16 @@ Team LaptopHulp NL`;
       if(!f.geb_maand) e.geb_maand="Maand verplicht";
       if(!f.geb_jaar) e.geb_jaar="Jaar verplicht";
       else if(!/^\d{4}$/.test(f.geb_jaar)) e.geb_jaar="Jaar = 4 cijfers";
-      else { const age=new Date().getFullYear()-+f.geb_jaar;
-        if(age<18) e.geb_jaar="Minimaal 18 jaar oud";
-        if(age>120) e.geb_jaar="Ongeldig geboortejaar"; }
+      else {
+        // Calculate exact age using full birthdate
+        const monthIdx = DUTCH_MONTHS.indexOf(f.geb_maand.toLowerCase());
+        const dob = new Date(+f.geb_jaar, monthIdx >= 0 ? monthIdx : 0, +f.geb_dag||1);
+        const today = new Date();
+        let age = today.getFullYear() - dob.getFullYear();
+        if (today.getMonth() < dob.getMonth() || (today.getMonth()===dob.getMonth() && today.getDate()<dob.getDate())) age--;
+        if(age < 18) e.geb_jaar="U moet minimaal 18 jaar oud zijn om u aan te melden";
+        if(age > 120) e.geb_jaar="Ongeldig geboortejaar";
+      }
       return e;
     };
     const v2 = (f) => {
@@ -469,6 +481,7 @@ Team LaptopHulp NL`;
         received_recent:{icon:"🚫",color:"#dc2626",bg:"#fff1f2",title:"Niet mogelijk"},
         not_received:   {icon:"⏳",color:"#b45309",bg:"#fffbeb",title:"Wachttijd actief"},
         same_cycle:     {icon:"📋",color:"#1d4ed8",bg:"#eff6ff",title:"Al aangemeld"},
+        excluded:       {icon:"🚫",color:"#dc2626",bg:"#fff1f2",title:"Niet in aanmerking"},
         cycle:          {icon:"🔒",color:"#374151",bg:"#f8fafc",title:"Gesloten"},
       };
       const cfg=configs[blocked.type]||configs.cycle;
@@ -736,6 +749,12 @@ Team LaptopHulp NL`;
           errs=v1(form);
           if(!Object.keys(errs).length && db){
             const result=lookupPerson(db.rows,form.voornaam,form.achternaam,form.geb_dag,form.geb_maand,form.geb_jaar);
+
+            // Manually excluded (111111)
+            if(result.status==="excluded"){
+              setBlocked({type:"excluded",message:"U heeft eerder al een apparaat ontvangen en komt niet in aanmerking voor een nieuw apparaat. Neem contact op met onze organisatie voor meer informatie."}); return;
+            }
+
             if(result.status==="received" && result.monthsAgo<36){
               const ds=result.date?result.date.toLocaleDateString("nl-NL"):"onbekend";
               const eligible=result.date?new Date(result.date.getFullYear()+3,result.date.getMonth(),result.date.getDate()).toLocaleDateString("nl-NL"):"";
