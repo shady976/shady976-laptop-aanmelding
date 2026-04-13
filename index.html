@@ -61,13 +61,17 @@ Team LaptopHulp NL`;
     }
 
     // 000000 = selected but not received
-    // Real serial (not empty, not 000000) = received device
-    // Empty or anything else = treat as no record (allow registration)
+    // Real serial number (alphanumeric, e.g. ZG092516H, 5K212378H) = received device
+    // Empty, nan, or any plain text (niet gekomen, wil geen laptop, etc.) = allow registration
     function serialStatus(serial) {
       const s = String(serial||"").trim();
-      if (s === "000000") return "not_received";
       if (s === "" || s === "nan") return "unknown";
-      return "received";
+      if (s === "000000") return "not_received";
+      // Real serial: contains both letters and digits, typically 8-10 chars
+      // e.g. ZG092516H, 5K212378H, 3J088724H, FZQKTF2, C7SK8X2
+      if (/^[A-Z0-9]{5,12}$/i.test(s)) return "received";
+      // Anything else (text like "niet gekomen", "wil geen laptop", etc.) = unknown → allow
+      return "unknown";
     }
 
     function lookupPerson(rows, voornaam, achternaam, dag, maand, jaar) {
