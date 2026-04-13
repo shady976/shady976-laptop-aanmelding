@@ -39,6 +39,8 @@ Team LaptopHulp NL`;
 
     const blockSymbols  = (v) => v.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ\s'-]/g,"");
     const onlyLetters   = (v) => /^[A-Za-zÀ-ÖØ-öø-ÿ\s'-]+$/.test(v.trim()) && v.trim().length > 0;
+    // Check that every word has at least 2 letters (no initials like S. or B.C)
+    const noInitials    = (v) => v.trim().split(/\s+/).every(word => word.replace(/['-]/g,"").length >= 2);
     const getPostcode = (f) => f.pc1 && f.pc2 ? f.pc1 + " " + f.pc2 : "";
     const validPostcode = (f) => /^\d{4}$/.test(f.pc1) && /^[A-Z]{2}$/.test(f.pc2);
 
@@ -229,8 +231,10 @@ Team LaptopHulp NL`;
       const e = {};
       if(!f.voornaam.trim()) e.voornaam="Voornaam is verplicht";
       else if(!onlyLetters(f.voornaam)) e.voornaam="Alleen letters, geen symbolen of cijfers";
+      else if(!noInitials(f.voornaam)) e.voornaam="Vul uw volledige voornaam in (geen initialen zoals 'S.')";
       if(!f.achternaam.trim()) e.achternaam="Achternaam is verplicht";
       else if(!onlyLetters(f.achternaam)) e.achternaam="Alleen letters, geen symbolen of cijfers";
+      else if(!noInitials(f.achternaam)) e.achternaam="Vul uw volledige achternaam in (geen initialen zoals 'S.')";
       if(!f.geb_dag) e.geb_dag="Dag verplicht";
       else if(!/^\d{1,2}$/.test(f.geb_dag)||+f.geb_dag<1||+f.geb_dag>31) e.geb_dag="Dag: 1–31";
       if(!f.geb_maand) e.geb_maand="Maand verplicht";
@@ -319,8 +323,8 @@ Team LaptopHulp NL`;
       return (
         <div>
           <div style={C.two}>
-            <Field label="Voornaam *" hint="Alleen letters" error={errors.voornaam}>
-              <Inp value={form.voornaam} onChange={v=>upd("voornaam",blockSymbols(v))} placeholder="Jan" error={errors.voornaam}/>
+            <Field label="Voornaam *" hint="Voornaam of voornamen — alleen letters" error={errors.voornaam}>
+              <Inp value={form.voornaam} onChange={v=>upd("voornaam",blockSymbols(v))} placeholder="Jan Peter" error={errors.voornaam}/>
             </Field>
             <Field label="Achternaam *" hint="Alleen letters" error={errors.achternaam}>
               <Inp value={form.achternaam} onChange={v=>upd("achternaam",blockSymbols(v))} placeholder="de Vries" error={errors.achternaam}/>
