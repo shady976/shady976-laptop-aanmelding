@@ -545,7 +545,7 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
       );
     }
 
-    function AdminPanels({cycleOpen,setCycleOpen,cycleStart,setCycleStart,cycleEnd,setCycleEnd,devices,setDevices,thankYou,setThankYou,submissions,allowMultiAddr,setAllowMultiAddr,exemptAddrs,setExemptAddrs,consentText,setConsentText,criteria,setCriteria}) {
+    function AdminPanels({cycleOpen,setCycleOpen,cycleStart,setCycleStart,cycleEnd,setCycleEnd,devices,setDevices,thankYou,setThankYou,submissions,allowMultiAddr,setAllowMultiAddr,exemptAddrs,setExemptAddrs,consentText,setConsentText,criteria,setCriteria,extraPages1,setExtraPages1,extraPages2,setExtraPages2}) {
       const [newLabel,setNewLabel]=useState("");
       const [newIcon,setNewIcon]=useState("📦");
       const [tab,setTab]=useState("cycle");
@@ -680,6 +680,54 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
                     ↺ Standaard herstellen
                   </button>
                 </div>
+
+                {/* Extra pages 1 */}
+                <div style={{marginTop:24,paddingTop:20,borderTop:"1px solid #f1f5f9"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                    <label style={{...C.label,fontSize:14}}>📢 Extra pagina's (na voorwaarden, vóór formulier)</label>
+                    <button onClick={()=>setExtraPages1(p=>[...p,{title:"",content:""}])} style={{
+                      padding:"6px 12px",borderRadius:8,border:"none",background:"#1d4ed8",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",
+                    }}>+ Pagina toevoegen</button>
+                  </div>
+                  {extraPages1.length===0&&<div style={{fontSize:13,color:"#94a3b8",marginBottom:8}}>Geen extra pagina's</div>}
+                  {extraPages1.map((p,i)=>(
+                    <div key={i} style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:10,padding:"14px",marginBottom:10}}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+                        <span style={{fontSize:12,fontWeight:600,color:"#475569"}}>Pagina {i+1}</span>
+                        <button onClick={()=>setExtraPages1(pp=>pp.filter((_,j)=>j!==i))} style={{background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:13}}>🗑 Verwijder</button>
+                      </div>
+                      <input value={p.title} onChange={e=>{const u=[...extraPages1];u[i]={...u[i],title:e.target.value};setExtraPages1(u);}}
+                        placeholder="Titel (optioneel)" style={{...C.input,marginBottom:8,fontSize:13}}/>
+                      <textarea value={p.content} onChange={e=>{const u=[...extraPages1];u[i]={...u[i],content:e.target.value};setExtraPages1(u);}}
+                        placeholder="Inhoud / tekst van de pagina" rows={4}
+                        style={{...C.input,resize:"vertical",fontFamily:"inherit",lineHeight:1.6,fontSize:13}}/>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Extra pages 2 */}
+                <div style={{marginTop:20,paddingTop:20,borderTop:"1px solid #f1f5f9"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                    <label style={{...C.label,fontSize:14}}>📢 Extra pagina's (na apparaatkeuze, vóór verzenden)</label>
+                    <button onClick={()=>setExtraPages2(p=>[...p,{title:"",content:""}])} style={{
+                      padding:"6px 12px",borderRadius:8,border:"none",background:"#1d4ed8",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",
+                    }}>+ Pagina toevoegen</button>
+                  </div>
+                  {extraPages2.length===0&&<div style={{fontSize:13,color:"#94a3b8",marginBottom:8}}>Geen extra pagina's</div>}
+                  {extraPages2.map((p,i)=>(
+                    <div key={i} style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:10,padding:"14px",marginBottom:10}}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+                        <span style={{fontSize:12,fontWeight:600,color:"#475569"}}>Pagina {i+1}</span>
+                        <button onClick={()=>setExtraPages2(pp=>pp.filter((_,j)=>j!==i))} style={{background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:13}}>🗑 Verwijder</button>
+                      </div>
+                      <input value={p.title} onChange={e=>{const u=[...extraPages2];u[i]={...u[i],title:e.target.value};setExtraPages2(u);}}
+                        placeholder="Titel (optioneel)" style={{...C.input,marginBottom:8,fontSize:13}}/>
+                      <textarea value={p.content} onChange={e=>{const u=[...extraPages2];u[i]={...u[i],content:e.target.value};setExtraPages2(u);}}
+                        placeholder="Inhoud / tekst van de pagina" rows={4}
+                        style={{...C.input,resize:"vertical",fontFamily:"inherit",lineHeight:1.6,fontSize:13}}/>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
             {tab==="message"&&(
@@ -750,11 +798,16 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
       const [exemptAddrs,setExemptAddrs]       = useState([]);
       const [showAdmin,setShowAdmin]   = useState(false);
 
-      // Pre-form flow: "consent" → "criteria" → "form"
-      const [preStep,setPreStep] = useState("consent"); // consent | criteria | form
-      const [consentAnswer,setConsentAnswer] = useState(null); // true | false | null
+      // Pre-form flow: "consent" → "criteria" → extraPages1 → "form"
+      const [preStep,setPreStep] = useState("consent");
+      const [consentAnswer,setConsentAnswer] = useState(null);
       const [criteriaAnswers,setCriteriaAnswers] = useState([null,null,null,null]);
       const [preError,setPreError] = useState("");
+      const [extraPages1,setExtraPages1] = useState([]); // after criteria, before form
+      const [extraPages2,setExtraPages2] = useState([]); // after apparaat, before review
+      const [extraPageIdx,setExtraPageIdx] = useState(0); // current extra page index
+      const [showReview,setShowReview] = useState(false); // review screen
+      const [reviewConfirmed,setReviewConfirmed] = useState(false); // confirmed review
       const [step,setStep]     = useState(1);
       const [errors,setErrors] = useState({});
       const [blocked,setBlocked] = useState(null);
@@ -880,16 +933,20 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
         else if(step===5){
           errs=v5(form);
           if(!Object.keys(errs).length){
-            const dev=devices.find(d=>d.id===form.apparaat);
-            setSubs(p=>[...p,{...form,apparaat:dev?dev.label:form.apparaat,timestamp:new Date().toLocaleString("nl-NL")}]);
-            setDone(true); return;
+            // After apparaat → go to extra pages 2 (if any), then review
+            if(extraPages2.length > 0){
+              setPreStep("extra2"); setExtraPageIdx(0);
+            } else {
+              setPreStep("review");
+            }
+            return;
           }
         }
         if(Object.keys(errs).length){setErrors(errs);return;}
         setStep(s=>s+1);
       };
 
-      const reset=()=>{setForm(EMPTY);setStep(1);setErrors({});setBlocked(null);setDone(false);setAddrOk(false);setAddrSt("idle");setAddrMsg("");setPreStep("consent");setConsentAnswer(null);setCriteriaAnswers([null,null,null,null]);setPreError("");};
+      const reset=()=>{setForm(EMPTY);setStep(1);setErrors({});setBlocked(null);setDone(false);setAddrOk(false);setAddrSt("idle");setAddrMsg("");setPreStep("consent");setConsentAnswer(null);setCriteriaAnswers([null,null,null,null]);setPreError("");setExtraPageIdx(0);setShowReview(false);setReviewConfirmed(false);};
 
       const CardHeader=()=>(
         <div style={{...C.header,position:"relative"}}>
@@ -1008,7 +1065,7 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
             </div>
           )}
 
-          {adminAuth && showAdmin && <AdminPanels {...{cycleOpen,setCycleOpen,cycleStart,setCycleStart,cycleEnd,setCycleEnd,devices,setDevices,thankYou,setThankYou,submissions,allowMultiAddr,setAllowMultiAddr,exemptAddrs,setExemptAddrs,consentText,setConsentText,criteria,setCriteria}}/>}
+          {adminAuth && showAdmin && <AdminPanels {...{cycleOpen,setCycleOpen,cycleStart,setCycleStart,cycleEnd,setCycleEnd,devices,setDevices,thankYou,setThankYou,submissions,allowMultiAddr,setAllowMultiAddr,exemptAddrs,setExemptAddrs,consentText,setConsentText,criteria,setCriteria,extraPages1,setExtraPages1,extraPages2,setExtraPages2}}/>}
 
           <div style={C.card}>
             <CardHeader/>
@@ -1149,13 +1206,72 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
                   <button onClick={()=>{
                     if(criteriaAnswers.some(a=>a===null)){setPreError("Beantwoord alle vragen om verder te gaan.");return;}
                     if(criteriaAnswers.some(a=>a===false)){setPreError("U kunt niet verder omdat u niet aan alle voorwaarden voldoet.");return;}
-                    setPreStep("form"); setPreError("");
+                    if(extraPages1.length > 0){ setPreStep("extra1"); setExtraPageIdx(0); }
+                    else { setPreStep("form"); }
+                    setPreError("");
                   }} style={{
                     padding:"12px 28px",borderRadius:9,border:"none",fontWeight:700,fontSize:15,cursor:"pointer",
                     background:"#1d4ed8",color:"#fff",
                   }}>Verder met aanmelden →</button>
                 </div>
               </div>
+             ) :
+
+             // ── Extra pages 1 (after criteria, before form) ──
+             preStep==="extra1" ? (
+              <ExtraPageScreen
+                pages={extraPages1}
+                idx={extraPageIdx}
+                onNext={()=>{
+                  if(extraPageIdx < extraPages1.length-1){ setExtraPageIdx(i=>i+1); }
+                  else { setPreStep("form"); setExtraPageIdx(0); }
+                }}
+                onBack={()=>{
+                  if(extraPageIdx > 0){ setExtraPageIdx(i=>i-1); }
+                  else { setPreStep("criteria"); }
+                }}
+              />
+             ) :
+
+             // ── Extra pages 2 (after apparaat, before review) ──
+             preStep==="extra2" ? (
+              <ExtraPageScreen
+                pages={extraPages2}
+                idx={extraPageIdx}
+                onNext={()=>{
+                  if(extraPageIdx < extraPages2.length-1){ setExtraPageIdx(i=>i+1); }
+                  else { setPreStep("review"); setExtraPageIdx(0); }
+                }}
+                onBack={()=>{
+                  if(extraPageIdx > 0){ setExtraPageIdx(i=>i-1); }
+                  else { setPreStep("form"); setStep(5); }
+                }}
+              />
+             ) :
+
+             // ── Review screen ──
+             preStep==="review" ? (
+              <ReviewScreen
+                form={form}
+                devices={devices}
+                onConfirm={()=>setPreStep("submit")}
+                onBack={()=>{
+                  if(extraPages2.length > 0){ setPreStep("extra2"); setExtraPageIdx(extraPages2.length-1); }
+                  else { setPreStep("form"); setStep(5); }
+                }}
+              />
+             ) :
+
+             // ── Submit screen ──
+             preStep==="submit" ? (
+              <SubmitScreen
+                onSubmit={()=>{
+                  const dev=devices.find(d=>d.id===form.apparaat);
+                  setSubs(p=>[...p,{...form,apparaat:dev?dev.label:form.apparaat,timestamp:new Date().toLocaleString("nl-NL")}]);
+                  setDone(true);
+                }}
+                onBack={()=>setPreStep("review")}
+              />
              ) : (
               <>
                 {cycleStart&&cycleEnd&&(
@@ -1184,10 +1300,104 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
                 </div>
                 <div style={C.btnRow}>
                   {step>1&&<button style={C.backBtn} onClick={()=>{setStep(s=>s-1);setErrors({});}}>← Terug</button>}
-                  <button style={C.nextBtn} onClick={next}>{step===5?"Aanmelding indienen ✓":"Volgende →"}</button>
+                  {step===1&&<button style={C.backBtn} onClick={()=>{
+                    if(extraPages1.length>0){setPreStep("extra1");setExtraPageIdx(extraPages1.length-1);}
+                    else setPreStep("criteria");
+                  }}>← Terug</button>}
+                  <button style={C.nextBtn} onClick={next}>Volgende →</button>
                 </div>
               </>
             )}
+          </div>
+        </div>
+      );
+    }
+
+    // ── Extra page screen ─────────────────────────────────────────────
+    function ExtraPageScreen({pages,idx,onNext,onBack}) {
+      const page = pages[idx];
+      if(!page) return null;
+      return (
+        <div style={{padding:"32px 28px"}}>
+          {pages.length > 1 && (
+            <div style={{fontSize:12,color:"#94a3b8",marginBottom:12}}>
+              {idx+1} / {pages.length}
+            </div>
+          )}
+          {page.title && (
+            <div style={{fontSize:20,fontWeight:700,color:"#1e293b",marginBottom:16}}>{page.title}</div>
+          )}
+          <div style={{fontSize:14,color:"#374151",lineHeight:1.8,whiteSpace:"pre-wrap",marginBottom:28}}>
+            {page.content}
+          </div>
+          <div style={{display:"flex",gap:12}}>
+            <button style={C.backBtn} onClick={onBack}>← Terug</button>
+            <button style={C.nextBtn} onClick={onNext}>Volgende →</button>
+          </div>
+        </div>
+      );
+    }
+
+    // ── Review screen ─────────────────────────────────────────────────
+    function ReviewScreen({form,devices,onConfirm,onBack}) {
+      const dev = devices.find(d=>d.id===form.apparaat);
+      const pc  = form.pc1&&form.pc2 ? form.pc1+" "+form.pc2 : "";
+      const rows = [
+        ["👤","Voornaam",    form.voornaam],
+        ["👤","Achternaam",  form.achternaam],
+        ["📅","Geboortedatum",`${form.geb_dag} ${form.geb_maand} ${form.geb_jaar}`],
+        ["📱","Telefoon",    form.telefoon],
+        ["📧","E-mail",      form.email],
+        ["📍","Straatnaam",  form.straatnaam],
+        ["🏠","Huisnummer",  form.huisnummer],
+        ["📮","Postcode",    pc],
+        ["🏙","Stadsdeel",   form.stadsdeel],
+        ["🪪","Stadspas",    form.stadspas],
+        ["💻","Apparaat",    dev?`${dev.icon} ${dev.label}`:"—"],
+      ];
+      return (
+        <div style={{padding:"28px"}}>
+          <div style={{fontSize:18,fontWeight:700,color:"#1e293b",marginBottom:6}}>👁 Controleer uw gegevens</div>
+          <div style={{fontSize:14,color:"#64748b",marginBottom:20}}>
+            Zijn alle gegevens correct? Controleer ze zorgvuldig voordat u verder gaat.
+          </div>
+          <div style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:12,padding:"16px",marginBottom:20}}>
+            {rows.map(([icon,label,val])=>(
+              <div key={label} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:"1px solid #f1f5f9",gap:12}}>
+                <span style={{color:"#64748b",fontSize:13,flexShrink:0}}>{icon} {label}</span>
+                <span style={{fontWeight:600,fontSize:13,textAlign:"right"}}>{val||"—"}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"14px",fontSize:14,color:"#92400e",marginBottom:20}}>
+            ⚠ Controleer of alle gegevens correct zijn. Na bevestiging kunt u ze niet meer wijzigen.
+          </div>
+          <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+            <button style={C.backBtn} onClick={onBack}>← Nee, ik wil iets aanpassen</button>
+            <button style={C.nextBtn} onClick={onConfirm}>✅ Ja, alle gegevens zijn correct</button>
+          </div>
+        </div>
+      );
+    }
+
+    // ── Submit screen ─────────────────────────────────────────────────
+    function SubmitScreen({onSubmit,onBack}) {
+      return (
+        <div style={{...C.center,padding:"40px 28px"}}>
+          <div style={{fontSize:48,marginBottom:16}}>📤</div>
+          <div style={{fontSize:20,fontWeight:700,color:"#1e293b",marginBottom:12}}>Aanmelding versturen</div>
+          <div style={{fontSize:15,color:"#374151",lineHeight:1.7,marginBottom:28}}>
+            Uw gegevens zijn gecontroleerd en klaar om te worden verstuurd.<br/>
+            Druk op de knop hieronder om uw aanmelding in te dienen.
+          </div>
+          <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
+            <button style={C.backBtn} onClick={onBack}>← Terug</button>
+            <button onClick={onSubmit} style={{
+              padding:"14px 32px",borderRadius:12,border:"none",
+              background:"linear-gradient(135deg,#16a34a,#22c55e)",
+              color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",
+              boxShadow:"0 4px 16px rgba(22,163,74,0.3)",
+            }}>🚀 Aanmelding indienen</button>
           </div>
         </div>
       );
