@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>LaptopHulp NL — Aanmelding</title>
+  <title>Apparaat aanvraag bij Cyberbank</title>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -39,8 +39,14 @@ Team LaptopHulp NL`;
 
     const blockSymbols  = (v) => v.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ\s'-]/g,"");
     const onlyLetters   = (v) => /^[A-Za-zÀ-ÖØ-öø-ÿ\s'-]+$/.test(v.trim()) && v.trim().length > 0;
-    // Check that every word has at least 2 letters (no initials like S. or B.C)
-    const noInitials    = (v) => v.trim().split(/\s+/).every(word => word.replace(/['-]/g,"").length >= 2);
+    // Dutch tussenvoegsels that are allowed to be short
+    const TUSSENVOEGSELS = ["de","van","den","der","ter","te","in","op","'t","d","l","el","al","la","da","du","le","di","dos","das","los","las","von","zu","bin","binte"];
+    // Check that every word has at least 2 letters, except known tussenvoegsels
+    const noInitials = (v) => v.trim().split(/\s+/).every(word => {
+      const w = word.toLowerCase().replace(/['-]/g,"");
+      if (TUSSENVOEGSELS.includes(word.toLowerCase())) return true;
+      return w.length >= 2;
+    });
     const getPostcode = (f) => f.pc1 && f.pc2 ? f.pc1 + " " + f.pc2 : "";
     const validPostcode = (f) => /^\d{4}$/.test(f.pc1) && /^[A-Z]{2}$/.test(f.pc2);
 
@@ -838,7 +844,7 @@ Team LaptopHulp NL`;
         <div style={{...C.header,position:"relative"}}>
           <div style={C.logoRow}>
             <span style={{fontSize:34}}>💻</span>
-            <div><div style={C.orgName}>LaptopHulp NL</div><div style={C.orgSub}>Gratis apparaat voor lage inkomens</div></div>
+            <div><div style={C.orgName}>Apparaat aanvraag bij Cyberbank</div><div style={C.orgSub}>Gratis apparaat voor lage inkomens</div></div>
           </div>
           {/* Discreet admin trigger — hidden in header corner */}
           {!adminAuth ? (
