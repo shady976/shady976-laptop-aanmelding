@@ -81,7 +81,6 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
 
     // 000000 = selected but not received
     // Real serial number (alphanumeric, e.g. ZG092516H, 5K212378H) = received device
-    // 000000 = selected but not received
     // 111111 = manually excluded by admin
     // Empty, nan, or any plain text = allow registration
     function serialStatus(serial) {
@@ -91,6 +90,48 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
       if (s === "111111") return "excluded";
       if (/^[A-Z0-9]{5,12}$/i.test(s)) return "received";
       return "unknown";
+    }
+
+    // ── Supabase lookup: zoek persoon in database_oud ─────────────────
+    async function lookupPersonSupabase(voornaam, achternaam, dag, maand, jaar) {
+      if (!SUPABASE_ENABLED) return null;
+      try {
+        const n = (s) => String(s||"").trim().toLowerCase();
+        const url = `${SUPABASE_URL}/rest/v1/database_oud?select=*&"Voornaam+".ilike.${encodeURIComponent(voornaam.trim())}&"Achternaam".ilike.${encodeURIComponent(achternaam.trim())}`;
+        const res = await fetch(
+          `${SUPABASE_URL}/rest/v1/database_oud?select=*`,
+          {
+            headers: {
+              "apikey": SUPABASE_KEY,
+              "Authorization": `Bearer ${SUPABASE_KEY}`,
+            }
+          }
+        );
+        if (!res.ok) return null;
+        const rows = await res.json();
+        // Filter locally for name + birthdate match
+        const matches = rows.filter(r => {
+          const vn = String(r["Voornaam "]||r["voornaam"]||"").trim().toLowerCase();
+          const an = String(r["Achternaam"]||r["achternaam"]||"").trim().toLowerCase();
+          const dg = String(+(r["Dag"]||r["dag"]||""));
+          const mn = String(r["Maand"]||r["maand"]||"").trim().toLowerCase();
+          const jr = String(r["Jaar"]||r["jaar"]||"").replace(/\.0$/,"");
+          return vn === n(voornaam) && an === n(achternaam) &&
+                 dg === String(+dag) && mn === n(maand) && jr === String(jaar);
+        });
+        if (matches.length === 0) return { status:"none" };
+        // Map to same format as lookupPerson
+        const mapped = matches.map(r => ({
+          serienummer:    r["Serienummer"]||r["serienummer"]||"",
+          uitdelen_datum: r["Uitdelen Datum"]||r["uitdelen_datum"]||"",
+          dag:            r["Dag"]||r["dag"]||"",
+          maand:          r["Maand"]||r["maand"]||"",
+          jaar:           r["Jaar"]||r["jaar"]||"",
+        }));
+        return lookupPerson(mapped, voornaam, achternaam, dag, maand, jaar);
+      } catch(e) {
+        return null;
+      }
     }
 
     function lookupPerson(rows, voornaam, achternaam, dag, maand, jaar) {
@@ -456,7 +497,7 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
     // ↓ Vervang deze waarden met uw eigen Supabase gegevens
     const SUPABASE_URL = "https://hnjvsmteghbbfqnnnrah.supabase.co";
     const SUPABASE_KEY = "sb_publishable_a2icSjPD2FcTwkD9sShrEg_DEgGc7tR";
-    const SUPABASE_ENABLED = true;              
+    const SUPABASE_ENABLED = true;                       
 
     async function saveToSupabase(data) {
       if (!SUPABASE_ENABLED) return { ok: true, message: "Supabase niet actief — lokaal opgeslagen" };
@@ -987,13 +1028,19 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
         }
       };
 
-      const next = () => {
+      const next = async () => {
         if(!cycleOpen){ setBlocked({type:"cycle",message:"De aanmeldingsperiode is momenteel gesloten. Kom later terug."}); return; }
         let errs={};
         if(step===1){
           errs=v1(form);
-          if(!Object.keys(errs).length && db){
-            const result=lookupPerson(db.rows,form.voornaam,form.achternaam,form.geb_dag,form.geb_maand,form.geb_jaar);
+          if(!Object.keys(errs).length){
+            // Gebruik Supabase als beschikbaar, anders lokale database
+            let result = { status:"none" };
+            if(SUPABASE_ENABLED){
+              result = await lookupPersonSupabase(form.voornaam,form.achternaam,form.geb_dag,form.geb_maand,form.geb_jaar) || { status:"none" };
+            } else if(db){
+              result = lookupPerson(db.rows,form.voornaam,form.achternaam,form.geb_dag,form.geb_maand,form.geb_jaar);
+            }
 
             // Manually excluded (111111)
             if(result.status==="excluded"){
