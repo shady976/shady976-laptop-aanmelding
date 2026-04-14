@@ -97,19 +97,27 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
       if (!SUPABASE_ENABLED) return null;
       try {
         const n = (s) => String(s||"").trim().toLowerCase();
-        const url = `${SUPABASE_URL}/rest/v1/database_oud?select=*&"Voornaam+".ilike.${encodeURIComponent(voornaam.trim())}&"Achternaam".ilike.${encodeURIComponent(achternaam.trim())}`;
+        // بحث مباشر بالاسم في Supabase
+        const params = new URLSearchParams({
+          select: "*",
+          "Voornaam ": `ilike.${voornaam.trim()}`,
+          "Achternaam": `ilike.${achternaam.trim()}`,
+        });
         const res = await fetch(
-          `${SUPABASE_URL}/rest/v1/database_oud?select=*`,
+          `${SUPABASE_URL}/rest/v1/database_oud?select=*&"Voornaam+".ilike.${encodeURIComponent('*'+voornaam.trim()+'*')}&"Achternaam".ilike.${encodeURIComponent('*'+achternaam.trim()+'*')}`,
           {
             headers: {
               "apikey": SUPABASE_KEY,
               "Authorization": `Bearer ${SUPABASE_KEY}`,
+              "Range": "0-999",
             }
           }
         );
         if (!res.ok) return null;
         const rows = await res.json();
-        // Filter locally for name + birthdate match
+        if (!Array.isArray(rows) || rows.length === 0) return { status:"none" };
+
+        // مطابقة دقيقة للاسم وتاريخ الميلاد
         const matches = rows.filter(r => {
           const vn = String(r["Voornaam "]||r["voornaam"]||"").trim().toLowerCase();
           const an = String(r["Achternaam"]||r["achternaam"]||"").trim().toLowerCase();
@@ -119,17 +127,23 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
           return vn === n(voornaam) && an === n(achternaam) &&
                  dg === String(+dag) && mn === n(maand) && jr === String(jaar);
         });
+
         if (matches.length === 0) return { status:"none" };
-        // Map to same format as lookupPerson
+
+        // تحويل للصيغة الموحدة
         const mapped = matches.map(r => ({
-          serienummer:    r["Serienummer"]||r["serienummer"]||"",
-          uitdelen_datum: r["Uitdelen Datum"]||r["uitdelen_datum"]||"",
-          dag:            r["Dag"]||r["dag"]||"",
-          maand:          r["Maand"]||r["maand"]||"",
-          jaar:           r["Jaar"]||r["jaar"]||"",
+          serienummer:    String(r["Serienummer"]||r["serienummer"]||""),
+          uitdelen_datum: String(r["Uitdelen Datum"]||r["uitdelen_datum"]||""),
+          voornaam:       String(r["Voornaam "]||r["voornaam"]||""),
+          achternaam:     String(r["Achternaam"]||r["achternaam"]||""),
+          dag:            String(r["Dag"]||r["dag"]||""),
+          maand:          String(r["Maand"]||r["maand"]||""),
+          jaar:           String(r["Jaar"]||r["jaar"]||""),
         }));
+
         return lookupPerson(mapped, voornaam, achternaam, dag, maand, jaar);
       } catch(e) {
+        console.error("Supabase lookup fout:", e);
         return null;
       }
     }
@@ -497,7 +511,7 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
     // ↓ Vervang deze waarden met uw eigen Supabase gegevens
     const SUPABASE_URL = "https://hnjvsmteghbbfqnnnrah.supabase.co";
     const SUPABASE_KEY = "sb_publishable_a2icSjPD2FcTwkD9sShrEg_DEgGc7tR";
-    const SUPABASE_ENABLED = true;                       
+    const SUPABASE_ENABLED = true;
 
     async function saveToSupabase(data) {
       if (!SUPABASE_ENABLED) return { ok: true, message: "Supabase niet actief — lokaal opgeslagen" };
