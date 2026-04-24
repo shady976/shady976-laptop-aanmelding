@@ -473,10 +473,8 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
     }
 
     // ── Supabase configuratie ─────────────────────────────────────────
-    // ↓ Vervang deze waarden met uw eigen Supabase gegevens
-    const SUPABASE_URL = "JOUW_SUPABASE_URL_HIER";        // ← bijv. https://xxx.supabase.co
-    const SUPABASE_KEY = "JOUW_PUBLISHABLE_KEY_HIER";     // ← sb_publishable_...
-    const SUPABASE_ENABLED = false;                        // ← Zet op TRUE na invullen URL en KEY
+    // Verbinding loopt via Edge Functions — geen sleutels nodig in dit bestand
+    const SUPABASE_ENABLED = true;
 
     async function saveToSupabase(data) {
       try {
@@ -1589,4 +1587,3 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
   </script>
 </body>
 </html>
-
