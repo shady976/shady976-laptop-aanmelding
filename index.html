@@ -1,1 +1,1591 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Apparaat aanvraag bij Cyberbank</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#f0f4ff;font-family:'Segoe UI',system-ui,sans-serif}
+    input,select,textarea,button{font-family:inherit}
+    input:focus,select:focus,textarea:focus{outline:2px solid #3b82f6;outline-offset:1px}
+  </style>
+</head>
+<body>
+  <div id="root"></div>
 
+  <script type="text/babel">
+    const { useState, useRef } = React;
+
+    const DUTCH_MONTHS = ["januari","februari","maart","april","mei","juni","juli","augustus","september","oktober","november","december"];
+    const AMSTERDAM_STADSDELEN = ["Centrum","Noord","Oost","West","Zuid","Zuidoost","Nieuw-West","Weesp"];
+    const DEFAULT_DEVICES = [
+      { id:"1", label:"Laptop",   icon:"💻", enabled:true },
+      { id:"2", label:"Tablet",   icon:"📱", enabled:true },
+      { id:"3", label:"Telefoon", icon:"📞", enabled:false },
+    ];
+    const DEFAULT_THANK_YOU = `Beste {voornaam},
+
+Hartelijk dank voor uw aanmelding bij LaptopHulp NL.
+
+Wij hebben uw registratie ontvangen en zullen deze zo spoedig mogelijk verwerken. U ontvangt bericht zodra uw aanvraag is beoordeeld.
+
+Met vriendelijke groet,
+Team LaptopHulp NL`;
+
+    const DEFAULT_CONSENT_TEXT = `Wilt u meedoen aan de loting van deze maand? Dan vragen wij u om toestemming om uw gegevens op te slaan en te verwerken binnen Cybersoek. We delen uw gegevens nooit met derden.
+
+Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan krijgt u automatisch een melding met het verzoek om u in te schrijven voor de volgende maand.`;
+
+    const DEFAULT_CRITERIA = [
+      "Kom je uit Amsterdam?",
+      "Ben je 18 jaar of ouder?",
+      "Heb je een Stadspas?",
+      "Heb je de afgelopen drie jaar geen laptop van ons ontvangen? (Als dit langer dan drie jaar geleden is, mag je je opnieuw aanmelden.)",
+    ];
+
+    const blockSymbols  = (v) => v.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ\s'-]/g,"");
+    const onlyLetters   = (v) => /^[A-Za-zÀ-ÖØ-öø-ÿ\s'-]+$/.test(v.trim()) && v.trim().length > 0;
+    // Dutch tussenvoegsels that are allowed to be short
+    const TUSSENVOEGSELS = ["de","van","den","der","ter","te","in","op","'t","d","l","el","al","la","da","du","le","di","dos","das","los","las","von","zu","bin","binte"];
+    // Check that every word has at least 2 letters, except known tussenvoegsels
+    const noInitials = (v) => v.trim().split(/\s+/).every(word => {
+      const w = word.toLowerCase().replace(/['-]/g,"");
+      if (TUSSENVOEGSELS.includes(word.toLowerCase())) return true;
+      return w.length >= 2;
+    });
+    const getPostcode = (f) => f.pc1 && f.pc2 ? f.pc1 + " " + f.pc2 : "";
+    const validPostcode = (f) => /^\d{4}$/.test(f.pc1) && /^[A-Z]{2}$/.test(f.pc2);
+
+    function parseDate(str) {
+      if (!str) return null;
+      const s = String(str).trim();
+      const m1 = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+      if (m1) return new Date(+m1[3], +m1[2]-1, +m1[1]);
+      const m2 = s.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
+      if (m2) return new Date(+m2[1], +m2[2]-1, +m2[3]);
+      const num = parseFloat(s);
+      if (!isNaN(num) && num > 40000 && num < 50000)
+        return new Date(Math.round((num - 25569) * 86400 * 1000));
+      return null;
+    }
+
+    function monthsDiff(date) {
+      const now = new Date();
+      return (now.getFullYear() - date.getFullYear()) * 12 + (now.getMonth() - date.getMonth());
+    }
+
+    // 000000 = selected but not received
+    // Real serial number (alphanumeric, e.g. ZG092516H, 5K212378H) = received device
+    // 111111 = manually excluded by admin
+    // Empty, nan, or any plain text = allow registration
+    function serialStatus(serial) {
+      const s = String(serial||"").trim();
+      if (s === "" || s === "nan") return "unknown";
+      if (s === "000000") return "not_received";
+      if (s === "111111") return "excluded";
+      if (/^[A-Z0-9]{5,12}$/i.test(s)) return "received";
+      return "unknown";
+    }
+
+    // ── Supabase lookup: zoek persoon in database_oud ─────────────────
+    // ── Edge Functions URLs ───────────────────────────────────────────
+    const FUNCTIONS_URL = "https://hnjvsmteghbbfqnnnrah.supabase.co/functions/v1";
+
+    async function lookupPersonSupabase(voornaam, achternaam, dag, maand, jaar) {
+      try {
+        const res = await fetch(`${FUNCTIONS_URL}/check-person`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ voornaam, achternaam, dag, maand, jaar })
+        });
+        if (!res.ok) return null;
+        const { matches } = await res.json();
+        if (!matches || matches.length === 0) return { status:"none" };
+        return lookupPerson(matches, voornaam, achternaam, dag, maand, jaar);
+      } catch(e) {
+        console.error("check-person fout:", e);
+        return null;
+      }
+    }
+
+    function lookupPerson(rows, voornaam, achternaam, dag, maand, jaar) {
+      const n = (s) => String(s||"").trim().toLowerCase().replace(/\s+/g," ");
+      const matches = rows.filter(r =>
+        n(r.voornaam) === n(voornaam) && n(r.achternaam) === n(achternaam) &&
+        String(+(r.dag||"")) === String(+dag) && n(r.maand) === n(maand) &&
+        String(r.jaar||"").replace(/\.0$/,"") === String(jaar)
+      );
+      if (matches.length === 0) return { status:"none" };
+
+      // Check for manual exclusion first (111111)
+      for (const r of matches) {
+        if (serialStatus(r.serienummer) === "excluded")
+          return { status:"excluded" };
+      }
+
+      // Check all matches — prioritize received status
+      for (const r of matches) {
+        const ss = serialStatus(r.serienummer);
+        if (ss === "received") {
+          const date = parseDate(r.uitdelen_datum);
+          const ago  = date ? monthsDiff(date) : 999;
+          return { status:"received", date, monthsAgo: ago };
+        }
+      }
+
+      // Check for 000000 (selected but not received)
+      for (const r of matches) {
+        const ss = serialStatus(r.serienummer);
+        if (ss === "not_received") {
+          const date = parseDate(r.uitdelen_datum);
+          if (!date) return { status:"none" };
+          const ago = monthsDiff(date);
+          return { status:"not_received", date, monthsAgo: ago };
+        }
+      }
+
+      // All matches have unknown serial → allow
+      return { status:"none" };
+    }
+
+    function parseXLSXFile(file) {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          try {
+            const wb  = XLSX.read(ev.target.result, {type:"array"});
+            const ws  = wb.Sheets[wb.SheetNames[0]];
+            const raw = XLSX.utils.sheet_to_json(ws, {defval:""});
+            const n   = (s) => String(s||"").trim().toLowerCase();
+            const rows = raw.map(r => {
+              const keys = Object.keys(r);
+              const get  = (...names) => {
+                for (const nm of names) {
+                  const k = keys.find(k => n(k) === n(nm));
+                  if (k !== undefined) return r[k];
+                }
+                return "";
+              };
+              return {
+                voornaam:       get("Voornaam","voornaam"),
+                achternaam:     get("Achternaam","achternaam"),
+                dag:            get("Dag","dag"),
+                maand:          get("Maand","maand"),
+                jaar:           get("Jaar","jaar"),
+                serienummer:    get("Serienummer","serienummer"),
+                uitdelen_datum: get("Uitdelen Datum","uitdelen datum","uitdelen_datum"),
+                adres:          get("Adres","adres"),
+              };
+            });
+            resolve({ok:true, rows: rows.filter(r => String(r.voornaam).trim())});
+          } catch(err) { resolve({ok:false, error:String(err)}); }
+        };
+        reader.readAsArrayBuffer(file);
+      });
+    }
+
+    function exportCSV(rows) {
+      // Use tab-separated values so Excel opens each field in its own column
+      const SEP = "\t";
+      const headers = [
+        "Voornaam","Achternaam","Dag","Maand","Jaar",
+        "Telefoonnummer","E-mail",
+        "Straatnaam","Huisnummer","Postcode","Stadsdeel",
+        "Stadspasnummer","Apparaat","Datum aanmelding"
+      ];
+      const esc = (v) => String(v||"").replace(/\t/g," ").replace(/\n/g," ");
+      const lines = [headers.join(SEP)];
+      rows.forEach(r => lines.push([
+        r.voornaam,
+        r.achternaam,
+        r.geb_dag,
+        r.geb_maand,
+        r.geb_jaar,
+        r.telefoon,
+        r.email,
+        r.straatnaam,
+        r.huisnummer,
+        (r.pc1&&r.pc2 ? r.pc1+" "+r.pc2 : ""),
+        r.stadsdeel,
+        r.stadspas,
+        r.apparaat,
+        r.timestamp
+      ].map(esc).join(SEP)));
+      const blob = new Blob(["\uFEFF"+lines.join("\r\n")],{type:"text/tab-separated-values;charset=utf-8"});
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href=url; a.download=`aanmeldingen_${new Date().toISOString().slice(0,10)}.tsv`;
+      a.click(); URL.revokeObjectURL(url);
+    }
+
+    async function verifyAddress(straat, huisnr, postcode) {
+      try {
+        const pcClean     = postcode.replace(/\s/g,"").toUpperCase();
+        const pcFormatted = pcClean.slice(0,4) + " " + pcClean.slice(4);
+        const hnNum       = parseInt(huisnr.replace(/\D/g,""), 10);
+
+        // Search by postcode + huisnummer only (most reliable in PDOK)
+        const query = encodeURIComponent(pcFormatted + " " + hnNum);
+        const url   = `https://api.pdok.nl/bzk/locatieserver/search/v3_1/free?q=${query}&fq=type:adres&fq=woonplaatsnaam:Amsterdam&rows=20`;
+        const res   = await fetch(url);
+        if (!res.ok) return {ok:false, error:"Verbinding met adresservice mislukt"};
+        const docs  = (await res.json())?.response?.docs || [];
+
+        // Accept if postcode + huisnummer match exactly
+        const match = docs.find(d => {
+          const dpc = (d.postcode||"").replace(/\s/g,"").toUpperCase();
+          return dpc === pcClean && Number(d.huisnummer) === hnNum;
+        });
+        if (match) return {ok:true, formatted:{
+          straat:   match.straatnaam     || straat,
+          huisnr:   String(match.huisnummer || huisnr),
+          postcode: match.postcode       || pcFormatted,
+          plaats:   match.woonplaatsnaam || "",
+        }};
+
+        // Not found — search by street+number in Amsterdam only to suggest correct postcode
+        const q2   = encodeURIComponent(straat + " " + hnNum + " Amsterdam");
+        const url2 = `https://api.pdok.nl/bzk/locatieserver/search/v3_1/free?q=${q2}&fq=type:adres&fq=woonplaatsnaam:Amsterdam&rows=10`;
+        const r2   = await fetch(url2);
+        if (r2.ok) {
+          const docs2 = (await r2.json())?.response?.docs || [];
+          const exact = docs2.find(d => Number(d.huisnummer) === hnNum);
+          if (exact?.postcode) return {ok:false, error:`Postcode klopt niet. Correcte postcode: ${exact.postcode}`};
+        }
+        return {ok:false, error:`"${pcFormatted} ${hnNum}" niet gevonden. Controleer postcode en huisnummer.`};
+      } catch(err) {
+        return {ok:false, error:"Adrescontrole niet beschikbaar (geen verbinding met PDOK)"};
+      }
+    }
+
+    // Validators
+    const v1 = (f) => {
+      const e = {};
+      if(!f.voornaam.trim()) e.voornaam="Voornaam is verplicht";
+      else if(!onlyLetters(f.voornaam)) e.voornaam="Alleen letters, geen symbolen of cijfers";
+      else if(!noInitials(f.voornaam)) e.voornaam="Vul uw volledige voornaam in (geen initialen zoals 'S.')";
+      if(!f.achternaam.trim()) e.achternaam="Achternaam is verplicht";
+      else if(!onlyLetters(f.achternaam)) e.achternaam="Alleen letters, geen symbolen of cijfers";
+      else if(!noInitials(f.achternaam)) e.achternaam="Vul uw volledige achternaam in (geen initialen zoals 'S.')";
+      if(!f.geb_dag) e.geb_dag="Dag verplicht";
+      else if(!/^\d{1,2}$/.test(f.geb_dag)||+f.geb_dag<1||+f.geb_dag>31) e.geb_dag="Dag: 1–31";
+      if(!f.geb_maand) e.geb_maand="Maand verplicht";
+      if(!f.geb_jaar) e.geb_jaar="Jaar verplicht";
+      else if(!/^\d{4}$/.test(f.geb_jaar)) e.geb_jaar="Jaar = 4 cijfers";
+      else {
+        // Calculate exact age using full birthdate
+        const monthIdx = DUTCH_MONTHS.indexOf(f.geb_maand.toLowerCase());
+        const dob = new Date(+f.geb_jaar, monthIdx >= 0 ? monthIdx : 0, +f.geb_dag||1);
+        const today = new Date();
+        let age = today.getFullYear() - dob.getFullYear();
+        if (today.getMonth() < dob.getMonth() || (today.getMonth()===dob.getMonth() && today.getDate()<dob.getDate())) age--;
+        if(age < 18) e.geb_jaar="U moet minimaal 18 jaar oud zijn om u aan te melden";
+        if(age > 120) e.geb_jaar="Ongeldig geboortejaar";
+      }
+      return e;
+    };
+    const v2 = (f) => {
+      const e = {};
+      const t=f.telefoon.replace(/\s/g,"");
+      if(!t) e.telefoon="Telefoonnummer is verplicht";
+      else if(!/^\d{10}$/.test(t)) e.telefoon="Exact 10 cijfers vereist";
+      else if(!t.startsWith("06")) e.telefoon="Moet beginnen met 06";
+      if(!f.email.trim()) e.email="E-mailadres is verplicht";
+      else if(!f.email.includes("@")) e.email="Voer een geldig e-mailadres in met @";
+      else if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) e.email="Ongeldig e-mailadres";
+      return e;
+    };
+    const v3 = (f, addrOk) => {
+      const e = {};
+      if(!f.straatnaam.trim()) e.straatnaam="Straatnaam is verplicht";
+      else if(!/^[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ\s]*$/.test(f.straatnaam)) e.straatnaam="Alleen letters, begint met hoofdletter";
+      if(!f.huisnummer.trim()) e.huisnummer="Huisnummer is verplicht";
+      else if(!/^\d+(-[A-Za-z0-9]{1,4})?$/.test(f.huisnummer.trim())) e.huisnummer="Moet beginnen met cijfer(s), bijv. 36, 36-A of 7-2";
+      if(!f.pc1) e.postcode="Postcode is verplicht";
+      else if(!/^\d{4}$/.test(f.pc1)) e.postcode="Voer 4 cijfers in";
+      else if(!f.pc2||!/^[A-Za-z]{2}$/.test(f.pc2)) e.postcode="Voer 2 letters in";
+      if(!f.stadsdeel) e.stadsdeel="Stadsdeel is verplicht";
+      if(f.straatnaam.trim()&&f.huisnummer.trim()&&validPostcode(f)&&!addrOk)
+        e.addrCheck="Controleer eerst het adres via de knop hieronder";
+      return e;
+    };
+    const v4 = (f) => {
+      const e = {};
+      const s=f.stadspas.replace(/\s/g,"");
+      if(!s) e.stadspas="Stadspas nummer is verplicht";
+      else if(s.length!==19) e.stadspas=`Exact 19 cijfers vereist (nu ${s.length})`;
+      else if(!s.startsWith("606")) e.stadspas="Moet beginnen met 606";
+      return e;
+    };
+    const v5 = (f) => { const e={}; if(!f.apparaat) e.apparaat="Maak een keuze"; return e; };
+
+    const STEPS=[
+      {title:"Persoonsgegevens",sub:"Naam & geboortedatum"},
+      {title:"Contactgegevens", sub:"Telefoon & e-mail"},
+      {title:"Adres",           sub:"Woonadres Amsterdam"},
+      {title:"Stadspas",        sub:"Inkomensbevestiging"},
+      {title:"Apparaat",        sub:"Uw keuze"},
+    ];
+    const EMPTY={voornaam:"",achternaam:"",geb_dag:"",geb_maand:"",geb_jaar:"",
+                 telefoon:"",email:"",straatnaam:"",huisnummer:"",pc1:"",pc2:"",
+                 stadsdeel:"",stadspas:"",apparaat:""};
+
+    // Shared UI
+    function Field({label,hint,error,children}) {
+      return (
+        <div style={{marginBottom:18}}>
+          <label style={C.label}>{label}</label>
+          {hint&&<div style={C.hint}>{hint}</div>}
+          {children}
+          {error&&<div style={C.err}>⚠ {error}</div>}
+        </div>
+      );
+    }
+    function Inp({value,onChange,placeholder,error,maxLength,type="text",style:sx={}}) {
+      return <input type={type} value={value} onChange={e=>onChange(e.target.value)}
+        placeholder={placeholder} maxLength={maxLength}
+        style={{...C.input,borderColor:error?"#ef4444":"#cbd5e1",...sx}}/>;
+    }
+    function Sel({value,onChange,error,children}) {
+      return <select value={value} onChange={e=>onChange(e.target.value)}
+        style={{...C.input,borderColor:error?"#ef4444":"#cbd5e1",color:value?"#1e293b":"#94a3b8"}}>{children}</select>;
+    }
+
+    function Step1({form,upd,errors}) {
+      return (
+        <div>
+          <div style={C.two}>
+            <Field label="Voornaam *" hint="Voornaam of voornamen — alleen letters" error={errors.voornaam}>
+              <Inp value={form.voornaam} onChange={v=>upd("voornaam",blockSymbols(v))} placeholder="Jan Peter" error={errors.voornaam}/>
+            </Field>
+            <Field label="Achternaam *" hint="Alleen letters" error={errors.achternaam}>
+              <Inp value={form.achternaam} onChange={v=>upd("achternaam",blockSymbols(v))} placeholder="de Vries" error={errors.achternaam}/>
+            </Field>
+          </div>
+          <Field label="Geboortedatum *" error={errors.geb_dag||errors.geb_maand||errors.geb_jaar}>
+            <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+              <div style={{flex:"0 0 72px"}}>
+                <Inp value={form.geb_dag} onChange={v=>upd("geb_dag",v.replace(/\D/g,"").slice(0,2))} placeholder="DD" maxLength={2} error={errors.geb_dag} style={{textAlign:"center"}}/>
+                <div style={C.subLabel}>Dag</div>
+              </div>
+              <div style={{flex:1}}>
+                <Sel value={form.geb_maand} onChange={v=>upd("geb_maand",v)} error={errors.geb_maand}>
+                  <option value="">Kies maand</option>
+                  {DUTCH_MONTHS.map(m=><option key={m} value={m}>{m.charAt(0).toUpperCase()+m.slice(1)}</option>)}
+                </Sel>
+                <div style={C.subLabel}>Maand</div>
+              </div>
+              <div style={{flex:"0 0 88px"}}>
+                <Inp value={form.geb_jaar} onChange={v=>upd("geb_jaar",v.replace(/\D/g,"").slice(0,4))} placeholder="JJJJ" maxLength={4} error={errors.geb_jaar} style={{textAlign:"center"}}/>
+                <div style={C.subLabel}>Jaar</div>
+              </div>
+            </div>
+          </Field>
+          <div style={C.info}>🔍 We controleren uw aanmeldingshistorie op basis van naam en geboortedatum.</div>
+        </div>
+      );
+    }
+
+    function Step2({form,upd,errors}) {
+      const telCount=form.telefoon.replace(/\D/g,"").length;
+      return (
+        <div>
+          <Field label="Telefoonnummer *" hint="Begint met 06 — exact 10 cijfers" error={errors.telefoon}>
+            <Inp value={form.telefoon} onChange={v=>upd("telefoon",v.replace(/\D/g,"").slice(0,10))} placeholder="0612345678" maxLength={10} error={errors.telefoon}/>
+            <div style={{...C.counter,color:telCount===10?"#22c55e":"#94a3b8"}}>{telCount}/10</div>
+          </Field>
+          <Field label="E-mailadres *" hint="Geen spaties — moet @ bevatten" error={errors.email}>
+            <Inp value={form.email} onChange={v=>upd("email",v.replace(/\s/g,""))} placeholder="naam@voorbeeld.nl" type="email" error={errors.email}/>
+            {form.email&&!form.email.includes("@")&&<div style={{fontSize:12,color:"#f59e0b",marginTop:4}}>⚠ Vergeet de @ niet</div>}
+          </Field>
+          <div style={C.info}>📬 Alleen voor contact over uw aanvraag.</div>
+        </div>
+      );
+    }
+
+    function Step3({form,upd,errors,addrStatus,addrMsg,addrOk,onCheck}) {
+      return (
+        <div>
+          <Field label="Straatnaam *" hint="Alleen letters en spaties, begint met hoofdletter" error={errors.straatnaam}>
+            <Inp value={form.straatnaam}
+              onChange={v => {
+                // Only letters (including Dutch/accented) and spaces
+                const clean = v.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ\s]/g,"");
+                // Auto-capitalize first letter
+                const capped = clean.length > 0 ? clean.charAt(0).toUpperCase() + clean.slice(1) : clean;
+                upd("straatnaam", capped);
+              }}
+              placeholder="Hoofdstraat" error={errors.straatnaam}/>
+          </Field>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+            <Field label="Huisnummer *" hint="Bijv. 36, 36-A of 7-2" error={errors.huisnummer}>
+              <Inp value={form.huisnummer}
+                onChange={v => {
+                  // Allow digits, dash, letters only — preserve order as typed
+                  const clean = v.replace(/[^0-9A-Za-z\-]/g,"").toUpperCase();
+                  upd("huisnummer", clean);
+                }}
+                placeholder="36 of 36-A of 7-2" error={errors.huisnummer}/>
+            </Field>
+            <Field label="Postcode *" hint="4 cijfers + 2 letters" error={errors.postcode}>
+              <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                <input
+                  value={form.pc1}
+                  onChange={e=>upd("pc1", e.target.value.replace(/\D/g,"").slice(0,4))}
+                  placeholder="1234" maxLength={4}
+                  style={{...C.input,width:"52%",textAlign:"center",borderColor:errors.postcode?"#ef4444":"#cbd5e1"}}/>
+                <span style={{fontWeight:700,color:"#94a3b8",fontSize:16,flexShrink:0}}>–</span>
+                <input
+                  value={form.pc2}
+                  onChange={e=>upd("pc2", e.target.value.replace(/[^a-zA-Z]/g,"").slice(0,2).toUpperCase())}
+                  placeholder="AB" maxLength={2}
+                  style={{...C.input,width:"40%",textAlign:"center",borderColor:errors.postcode?"#ef4444":"#cbd5e1",textTransform:"uppercase"}}/>
+              </div>
+            </Field>
+          </div>
+          <Field label="Stadsdeel *" error={errors.stadsdeel}>
+            <Sel value={form.stadsdeel} onChange={v=>upd("stadsdeel",v)} error={errors.stadsdeel}>
+              <option value="">Kies stadsdeel Amsterdam</option>
+              {AMSTERDAM_STADSDELEN.map(s=><option key={s} value={s}>{s}</option>)}
+            </Sel>
+          </Field>
+          <div style={{marginBottom:8}}>
+            <button onClick={onCheck} disabled={addrStatus==="checking"} style={{
+              padding:"10px 20px",borderRadius:9,border:"none",cursor:"pointer",fontWeight:700,fontSize:14,
+              background:addrOk?"#16a34a":addrStatus==="checking"?"#94a3b8":"#1d4ed8",
+              color:"#fff",opacity:addrStatus==="checking"?0.7:1,
+            }}>
+              {addrStatus==="checking"?"⏳ Controleren…":addrOk?"✅ Adres geverifieerd":"🔍 Adres controleren"}
+            </button>
+          </div>
+          {addrMsg&&<div style={{padding:"10px 14px",borderRadius:9,fontSize:13,marginBottom:6,
+            background:addrOk?"#f0fdf4":"#fff7ed",border:`1px solid ${addrOk?"#86efac":"#fed7aa"}`,
+            color:addrOk?"#15803d":"#c2410c"}}>{addrMsg}</div>}
+          {errors.addrCheck&&<div style={C.err}>⚠ {errors.addrCheck}</div>}
+          {!addrOk&&<div style={C.info}>📍 Klik op "Adres controleren" om uw adres te verifiëren via PDOK.</div>}
+        </div>
+      );
+    }
+
+    // ── Supabase configuratie ─────────────────────────────────────────
+    // ↓ Vervang deze waarden met uw eigen Supabase gegevens
+    const SUPABASE_URL = "JOUW_SUPABASE_URL_HIER";        // ← bijv. https://xxx.supabase.co
+    const SUPABASE_KEY = "JOUW_PUBLISHABLE_KEY_HIER";     // ← sb_publishable_...
+    const SUPABASE_ENABLED = false;                        // ← Zet op TRUE na invullen URL en KEY
+
+    async function saveToSupabase(data) {
+      try {
+        const res = await fetch(`${FUNCTIONS_URL}/save-aanmelding`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data)
+        });
+        if (!res.ok) {
+          const err = await res.text();
+          return { ok: false, message: "Fout bij opslaan: " + err };
+        }
+        return { ok: true, message: "Opgeslagen in database" };
+      } catch(e) {
+        return { ok: false, message: "Verbinding mislukt: " + e.message };
+      }
+    }
+
+    // ── Intersolve Stadspas API ───────────────────────────────────────
+    // ↓ Vervang deze waarden wanneer u de API-gegevens ontvangt van Intersolve
+    const INTERSOLVE_API_URL = "JOUW_API_URL_HIER";  // ← API endpoint URL
+    const INTERSOLVE_USERNAME = "JOUW_USERNAME_HIER"; // ← Gebruikersnaam
+    const INTERSOLVE_PASSWORD = "JOUW_PASSWORD_HIER"; // ← Wachtwoord / API key
+    const INTERSOLVE_ENABLED  = false; // ← Zet op TRUE wanneer API gereed is
+
+    async function checkStadspas(stadspasNummer) {
+      // Als API nog niet geconfigureerd is, sla verificatie over
+      if (!INTERSOLVE_ENABLED) return { ok:true, status:"unknown", message:"" };
+
+      try {
+        const response = await fetch(INTERSOLVE_API_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Basic " + btoa(INTERSOLVE_USERNAME + ":" + INTERSOLVE_PASSWORD),
+          },
+          body: JSON.stringify({ kaartnummer: stadspasNummer }),
+        });
+
+        if (!response.ok) return { ok:false, status:"error", message:"Verbinding met Stadspas verificatie mislukt" };
+
+        const data = await response.json();
+
+        // Pas onderstaande logica aan op basis van de API documentatie van Intersolve
+        const status = data.status || data.kaartStatus || "";
+
+        if (status === "geblokkeerd") {
+          return { ok:false, status:"geblokkeerd", message:"Uw Stadspas is geblokkeerd. Neem contact op met de gemeente Amsterdam." };
+        }
+        if (status === "verlopen") {
+          return { ok:false, status:"verlopen", message:"Uw Stadspas is verlopen. Vernieuw uw pas via de gemeente Amsterdam." };
+        }
+        if (status === "niet gevonden" || status === "ongeldig") {
+          return { ok:false, status:"ongeldig", message:"Dit is geen geldig kaartnummer van de Stadspas Amsterdam." };
+        }
+
+        // Controleer op Cyberbank aanbieding
+        const heeftCyberbankAanbieding = data.aanbiedingen?.some(a =>
+          a.naam?.toLowerCase().includes("cyberbank")
+        ) || false;
+
+        if (!heeftCyberbankAanbieding) {
+          return { ok:false, status:"geen_aanbieding", message:"Uw Stadspas heeft geen actieve Cyberbank aanbieding. U bent mogelijk al eerder geselecteerd." };
+        }
+
+        return { ok:true, status:"actief", message:"✅ Stadspas is actief en geldig" };
+
+      } catch(err) {
+        return { ok:false, status:"error", message:"Stadspas verificatie niet beschikbaar. Probeer opnieuw." };
+      }
+    }
+
+    function Step4({form,upd,errors,stadspasStatus,stadspasChecking,onCheckStadspas}) {
+      const count=form.stadspas.replace(/\D/g,"").length;
+      const valid=count===19&&form.stadspas.startsWith("606");
+      return (
+        <div>
+          <Field label="Stadspas nummer *" hint="Exact 19 cijfers — begint met 606" error={errors.stadspas}>
+            <Inp value={form.stadspas} onChange={v=>{upd("stadspas",v.replace(/\D/g,"").slice(0,19));}} placeholder="606XXXXXXXXXXXXXXXX" maxLength={19} error={errors.stadspas}/>
+            <div style={{...C.counter,color:valid?"#22c55e":"#94a3b8"}}>{count}/19{valid?" ✓":""}</div>
+          </Field>
+
+          {/* Intersolve verificatie knop — alleen tonen als API enabled */}
+          {INTERSOLVE_ENABLED && valid && (
+            <div style={{marginTop:8,marginBottom:8}}>
+              <button onClick={onCheckStadspas} disabled={stadspasChecking} style={{
+                padding:"10px 20px",borderRadius:9,border:"none",cursor:"pointer",fontWeight:700,fontSize:14,
+                background: stadspasStatus?.ok ? "#16a34a" : stadspasChecking ? "#94a3b8" : "#1d4ed8",
+                color:"#fff",opacity:stadspasChecking?0.7:1,
+              }}>
+                {stadspasChecking ? "⏳ Controleren…" : stadspasStatus?.ok ? "✅ Stadspas geverifieerd" : "🔍 Stadspas controleren"}
+              </button>
+            </div>
+          )}
+
+          {/* Status bericht */}
+          {stadspasStatus && (
+            <div style={{
+              padding:"10px 14px",borderRadius:9,fontSize:13,marginBottom:6,
+              background: stadspasStatus.ok ? "#f0fdf4" : "#fff7ed",
+              border:`1px solid ${stadspasStatus.ok ? "#86efac" : "#fed7aa"}`,
+              color: stadspasStatus.ok ? "#15803d" : "#c2410c",
+            }}>{stadspasStatus.message}</div>
+          )}
+
+          <div style={C.info}>🪪 Uw Stadspas bevestigt dat u in aanmerking komt voor dit programma.</div>
+        </div>
+      );
+    }
+
+    function Step5({form,upd,errors,devices}) {
+      const active=devices.filter(d=>d.enabled);
+      return (
+        <div>
+          <div style={{fontSize:14,color:"#475569",marginBottom:16}}>Welk apparaat heeft u nodig?</div>
+          {active.length===0
+            ? <div style={{...C.info,color:"#b45309",background:"#fffbeb",border:"1px solid #fde68a"}}>⚠ Geen apparaten beschikbaar. Neem contact op met onze organisatie.</div>
+            : <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                {active.map(opt=>(
+                  <button key={opt.id} onClick={()=>upd("apparaat",opt.id)} style={{
+                    display:"flex",alignItems:"center",gap:16,padding:"16px 20px",borderRadius:12,
+                    border:"2px solid",borderColor:form.apparaat===opt.id?"#1d4ed8":"#e2e8f0",
+                    background:form.apparaat===opt.id?"#eff6ff":"#fff",cursor:"pointer",textAlign:"left",transition:"all .2s",
+                  }}>
+                    <span style={{fontSize:30}}>{opt.icon}</span>
+                    <div style={{fontWeight:700,fontSize:16,color:form.apparaat===opt.id?"#1d4ed8":"#1e293b"}}>{opt.label}</div>
+                    <div style={{marginLeft:"auto",width:22,height:22,borderRadius:"50%",border:"2px solid",
+                      borderColor:form.apparaat===opt.id?"#1d4ed8":"#cbd5e1",
+                      background:form.apparaat===opt.id?"#1d4ed8":"#fff",
+                      display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                      {form.apparaat===opt.id&&<span style={{color:"#fff",fontSize:13,fontWeight:700}}>✓</span>}
+                    </div>
+                  </button>
+                ))}
+              </div>
+          }
+          {errors.apparaat&&<div style={{...C.err,marginTop:12}}>⚠ {errors.apparaat}</div>}
+        </div>
+      );
+    }
+
+    function BlockedScreen({blocked,onBack}) {
+      const configs = {
+        received_recent:{icon:"🚫",color:"#dc2626",bg:"#fff1f2",title:"Niet mogelijk"},
+        not_received:   {icon:"⏳",color:"#b45309",bg:"#fffbeb",title:"Wachttijd actief"},
+        same_cycle:     {icon:"📋",color:"#1d4ed8",bg:"#eff6ff",title:"Al aangemeld"},
+        excluded:       {icon:"🚫",color:"#dc2626",bg:"#fff1f2",title:"Niet in aanmerking"},
+        cycle:          {icon:"🔒",color:"#374151",bg:"#f8fafc",title:"Gesloten"},
+      };
+      const cfg=configs[blocked.type]||configs.cycle;
+      return (
+        <div style={{...C.center,background:cfg.bg}}>
+          <div style={{fontSize:52,marginBottom:14}}>{cfg.icon}</div>
+          <div style={{fontSize:20,fontWeight:700,color:cfg.color,marginBottom:14}}>{cfg.title}</div>
+          <div style={{fontSize:15,color:"#374151",lineHeight:1.75,marginBottom:20,maxWidth:380,margin:"0 auto 20px"}}>{blocked.message}</div>
+          <div style={{fontSize:13,color:"#64748b",marginBottom:24}}>Heeft u vragen? Neem contact op met onze organisatie.</div>
+          <button style={C.backBtn} onClick={onBack}>← Terug</button>
+        </div>
+      );
+    }
+
+    function SuccessView({form,devices,thankYou,onReset}) {
+      const dev=devices.find(d=>d.id===form.apparaat);
+      const msg=thankYou.replace(/\{voornaam\}/g,form.voornaam);
+      return (
+        <div style={C.center}>
+          <div style={{fontSize:52,marginBottom:14}}>✅</div>
+          <div style={{fontSize:20,fontWeight:700,color:"#15803d",marginBottom:16}}>Aanmelding ontvangen!</div>
+          <div style={{...C.summary,textAlign:"left",marginBottom:20}}>
+            {[["📅","Geboortedatum",`${form.geb_dag} ${form.geb_maand} ${form.geb_jaar}`],
+              ["📱","Telefoon",form.telefoon],["📧","E-mail",form.email],
+              ["📍","Adres",`${form.straatnaam} ${form.huisnummer}, ${getPostcode(form)}`],
+              ["🏙","Stadsdeel",form.stadsdeel],["🪪","Stadspas",form.stadspas],
+              ["💻","Apparaat",dev?`${dev.icon} ${dev.label}`:"—"]
+            ].map(([icon,k,v])=>(
+              <div key={k} style={C.sumRow}>
+                <span style={{color:"#64748b",fontSize:13}}>{icon} {k}</span>
+                <span style={{fontWeight:600,fontSize:13}}>{v}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{background:"#f0fdf4",border:"1px solid #86efac",borderRadius:12,
+            padding:"18px 20px",marginBottom:20,textAlign:"left",
+            fontSize:14,color:"#14532d",lineHeight:1.8,whiteSpace:"pre-wrap"}}>{msg}</div>
+          <button style={C.backBtn} onClick={onReset}>Nieuwe aanmelding</button>
+        </div>
+      );
+    }
+
+    function AdminPanels({cycleOpen,setCycleOpen,cycleStart,setCycleStart,cycleEnd,setCycleEnd,devices,setDevices,thankYou,setThankYou,submissions,allowMultiAddr,setAllowMultiAddr,exemptAddrs,setExemptAddrs,consentText,setConsentText,criteria,setCriteria,extraPages1,setExtraPages1,extraPages2,setExtraPages2}) {
+      const [newLabel,setNewLabel]=useState("");
+      const [newIcon,setNewIcon]=useState("📦");
+      const [tab,setTab]=useState("cycle");
+      const addDevice=()=>{
+        if(!newLabel.trim())return;
+        setDevices(p=>[...p,{id:Date.now().toString(),label:newLabel.trim(),icon:newIcon,enabled:true}]);
+        setNewLabel(""); setNewIcon("📦");
+      };
+      return (
+        <div style={C.panel}>
+          <div style={{display:"flex",borderBottom:"1px solid #e2e8f0"}}>
+            {[["cycle","📅 Cyclus"],["devices","🖥 Apparaten"],["address","🏠 Adressen"],["pages","📄 Pagina's"],["message","✉ Bericht"],["export","📥 Export"]].map(([k,l])=>(
+              <button key={k} onClick={()=>setTab(k)} style={{
+                flex:1,padding:"12px 6px",border:"none",background:"none",cursor:"pointer",
+                fontWeight:tab===k?700:400,fontSize:12,
+                color:tab===k?"#1d4ed8":"#64748b",
+                borderBottom:tab===k?"2px solid #1d4ed8":"2px solid transparent",
+              }}>{l}</button>
+            ))}
+          </div>
+          <div style={{padding:"20px 24px"}}>
+            {tab==="cycle"&&(
+              <div>
+                <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:20,flexWrap:"wrap"}}>
+                  <span style={{fontSize:15,fontWeight:600,color:"#374151"}}>Status:</span>
+                  <button onClick={()=>setCycleOpen(p=>!p)} style={{
+                    padding:"8px 20px",borderRadius:9,border:"none",cursor:"pointer",fontWeight:700,fontSize:14,
+                    background:cycleOpen?"#16a34a":"#dc2626",color:"#fff",
+                  }}>{cycleOpen?"🟢 OPEN":"🔴 GESLOTEN"}</button>
+                  <span style={{fontSize:13,color:"#64748b"}}>{cycleOpen?"Aanmelding is open":"Aanmelding is gesloten"}</span>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
+                  <div>
+                    <label style={C.label}>Startdatum</label>
+                    <input type="date" value={cycleStart} onChange={e=>setCycleStart(e.target.value)} style={C.input}/>
+                  </div>
+                  <div>
+                    <label style={C.label}>Einddatum</label>
+                    <input type="date" value={cycleEnd} onChange={e=>setCycleEnd(e.target.value)} style={C.input}/>
+                  </div>
+                </div>
+                <div style={C.info}>💡 Stel datums in en klik OPEN voor een nieuwe periode. Klik GESLOTEN bij overdruk.</div>
+              </div>
+            )}
+            {tab==="devices"&&(
+              <div>
+                {devices.map(d=>(
+                  <div key={d.id} style={C.devRow}>
+                    <input value={d.icon} onChange={e=>setDevices(p=>p.map(x=>x.id===d.id?{...x,icon:e.target.value}:x))}
+                      style={{width:40,textAlign:"center",fontSize:18,border:"1px solid #e2e8f0",borderRadius:8,padding:"4px",background:"#f8fafc"}}/>
+                    <input value={d.label} onChange={e=>setDevices(p=>p.map(x=>x.id===d.id?{...x,label:e.target.value}:x))}
+                      style={{flex:1,padding:"8px 10px",borderRadius:8,border:"1px solid #e2e8f0",fontSize:14,fontWeight:600,background:"#f8fafc"}}/>
+                    <button onClick={()=>setDevices(p=>p.map(x=>x.id===d.id?{...x,enabled:!x.enabled}:x))} style={{
+                      padding:"6px 12px",borderRadius:8,border:"none",fontSize:12,fontWeight:700,cursor:"pointer",
+                      background:d.enabled?"#dcfce7":"#fee2e2",color:d.enabled?"#16a34a":"#dc2626",
+                    }}>{d.enabled?"✅ Aan":"❌ Uit"}</button>
+                    <button onClick={()=>setDevices(p=>p.filter(x=>x.id!==d.id))} style={{
+                      padding:"6px 9px",borderRadius:8,border:"none",background:"#fee2e2",color:"#dc2626",fontSize:14,cursor:"pointer",fontWeight:700,
+                    }}>🗑</button>
+                  </div>
+                ))}
+                <div style={{...C.devRow,marginTop:16,paddingTop:16,borderTop:"1px solid #f1f5f9"}}>
+                  <input value={newIcon} onChange={e=>setNewIcon(e.target.value)}
+                    style={{width:40,textAlign:"center",fontSize:18,border:"1px solid #bfdbfe",borderRadius:8,padding:"4px",background:"#eff6ff"}}/>
+                  <input value={newLabel} onChange={e=>setNewLabel(e.target.value)} placeholder="Nieuw apparaat…"
+                    style={{flex:1,padding:"8px 10px",borderRadius:8,border:"1px solid #bfdbfe",fontSize:14,background:"#eff6ff"}}/>
+                  <button onClick={addDevice} style={{padding:"8px 14px",borderRadius:8,border:"none",background:"#1d4ed8",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}}>+ Voeg toe</button>
+                </div>
+              </div>
+            )}
+            {tab==="address"&&(
+              <div>
+                {/* Toggle multi-address */}
+                <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:20,flexWrap:"wrap"}}>
+                  <span style={{fontSize:15,fontWeight:600,color:"#374151"}}>Meerdere registraties per adres:</span>
+                  <button onClick={()=>setAllowMultiAddr(p=>!p)} style={{
+                    padding:"8px 20px",borderRadius:9,border:"none",cursor:"pointer",fontWeight:700,fontSize:14,
+                    background:allowMultiAddr?"#16a34a":"#dc2626",color:"#fff",
+                  }}>{allowMultiAddr?"🟢 TOEGESTAAN":"🔴 GEBLOKKEERD"}</button>
+                  <span style={{fontSize:13,color:"#64748b"}}>
+                    {allowMultiAddr?"Meerdere personen per adres mogen zich aanmelden":"Één aanmelding per adres toegestaan"}
+                  </span>
+                </div>
+                <div style={{...C.info,marginBottom:16}}>
+                  🏠 Adressen in de uitzonderingslijst zijn altijd toegestaan, ongeacht de instelling hierboven (bijv. opvanghuizen, zorginstellingen).
+                </div>
+                {/* Exempt addresses list */}
+                <label style={{...C.label,marginBottom:8}}>Uitgezonderde adressen (altijd toegestaan):</label>
+                {exemptAddrs.map((addr,i)=>(
+                  <div key={i} style={{display:"flex",gap:8,marginBottom:8,alignItems:"center"}}>
+                    <input value={addr} onChange={e=>{
+                      const updated=[...exemptAddrs]; updated[i]=e.target.value; setExemptAddrs(updated);
+                    }} style={{flex:1,padding:"8px 10px",borderRadius:8,border:"1px solid #e2e8f0",fontSize:14,background:"#f8fafc"}}
+                    placeholder="bijv. Hoofdstraat 1"/>
+                    <button onClick={()=>setExemptAddrs(exemptAddrs.filter((_,j)=>j!==i))} style={{
+                      padding:"6px 10px",borderRadius:8,border:"none",background:"#fee2e2",color:"#dc2626",fontSize:14,cursor:"pointer",fontWeight:700,
+                    }}>🗑</button>
+                  </div>
+                ))}
+                <button onClick={()=>setExemptAddrs(p=>[...p,""])} style={{
+                  padding:"8px 16px",borderRadius:8,border:"none",background:"#1d4ed8",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",marginTop:4,
+                }}>+ Adres toevoegen</button>
+              </div>
+            )}
+            {tab==="pages"&&(
+              <div>
+                {/* Consent text */}
+                <div style={{marginBottom:24}}>
+                  <label style={{...C.label,fontSize:14,marginBottom:8,display:"block"}}>📋 Tekst toestemmingspagina</label>
+                  <textarea value={consentText} onChange={e=>setConsentText(e.target.value)}
+                    rows={6} style={{...C.input,resize:"vertical",fontFamily:"inherit",lineHeight:1.7,fontSize:13}}/>
+                  <button onClick={()=>setConsentText(DEFAULT_CONSENT_TEXT)}
+                    style={{marginTop:6,padding:"6px 14px",borderRadius:8,border:"1px solid #e2e8f0",background:"#fff",color:"#475569",fontSize:12,cursor:"pointer"}}>
+                    ↺ Standaard herstellen
+                  </button>
+                </div>
+                {/* Criteria */}
+                <div>
+                  <label style={{...C.label,fontSize:14,marginBottom:8,display:"block"}}>✅ Voorwaarden (kom jij in aanmerking?)</label>
+                  <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>Alle voorwaarden moeten met 'Ja' beantwoord worden om door te gaan.</div>
+                  {criteria.map((q,i)=>(
+                    <div key={i} style={{marginBottom:12}}>
+                      <div style={{fontSize:12,color:"#64748b",marginBottom:4}}>Voorwaarde {i+1}</div>
+                      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                        <input value={q} onChange={e=>{const u=[...criteria];u[i]=e.target.value;setCriteria(u);}}
+                          style={{flex:1,padding:"8px 10px",borderRadius:8,border:"1px solid #e2e8f0",fontSize:13,background:"#f8fafc"}}/>
+                      </div>
+                    </div>
+                  ))}
+                  <button onClick={()=>setCriteria(DEFAULT_CRITERIA)}
+                    style={{marginTop:4,padding:"6px 14px",borderRadius:8,border:"1px solid #e2e8f0",background:"#fff",color:"#475569",fontSize:12,cursor:"pointer"}}>
+                    ↺ Standaard herstellen
+                  </button>
+                </div>
+
+                {/* Extra pages 1 */}
+                <div style={{marginTop:24,paddingTop:20,borderTop:"1px solid #f1f5f9"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                    <label style={{...C.label,fontSize:14}}>📢 Extra pagina's (na voorwaarden, vóór formulier)</label>
+                    <button onClick={()=>setExtraPages1(p=>[...p,{title:"",content:""}])} style={{
+                      padding:"6px 12px",borderRadius:8,border:"none",background:"#1d4ed8",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",
+                    }}>+ Pagina toevoegen</button>
+                  </div>
+                  {extraPages1.length===0&&<div style={{fontSize:13,color:"#94a3b8",marginBottom:8}}>Geen extra pagina's</div>}
+                  {extraPages1.map((p,i)=>(
+                    <div key={i} style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:10,padding:"14px",marginBottom:10}}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+                        <span style={{fontSize:12,fontWeight:600,color:"#475569"}}>Pagina {i+1}</span>
+                        <button onClick={()=>setExtraPages1(pp=>pp.filter((_,j)=>j!==i))} style={{background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:13}}>🗑 Verwijder</button>
+                      </div>
+                      <input value={p.title} onChange={e=>{const u=[...extraPages1];u[i]={...u[i],title:e.target.value};setExtraPages1(u);}}
+                        placeholder="Titel (optioneel)" style={{...C.input,marginBottom:8,fontSize:13}}/>
+                      <textarea value={p.content} onChange={e=>{const u=[...extraPages1];u[i]={...u[i],content:e.target.value};setExtraPages1(u);}}
+                        placeholder="Inhoud / tekst van de pagina" rows={4}
+                        style={{...C.input,resize:"vertical",fontFamily:"inherit",lineHeight:1.6,fontSize:13}}/>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Extra pages 2 */}
+                <div style={{marginTop:20,paddingTop:20,borderTop:"1px solid #f1f5f9"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                    <label style={{...C.label,fontSize:14}}>📢 Extra pagina's (na apparaatkeuze, vóór verzenden)</label>
+                    <button onClick={()=>setExtraPages2(p=>[...p,{title:"",content:""}])} style={{
+                      padding:"6px 12px",borderRadius:8,border:"none",background:"#1d4ed8",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",
+                    }}>+ Pagina toevoegen</button>
+                  </div>
+                  {extraPages2.length===0&&<div style={{fontSize:13,color:"#94a3b8",marginBottom:8}}>Geen extra pagina's</div>}
+                  {extraPages2.map((p,i)=>(
+                    <div key={i} style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:10,padding:"14px",marginBottom:10}}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+                        <span style={{fontSize:12,fontWeight:600,color:"#475569"}}>Pagina {i+1}</span>
+                        <button onClick={()=>setExtraPages2(pp=>pp.filter((_,j)=>j!==i))} style={{background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:13}}>🗑 Verwijder</button>
+                      </div>
+                      <input value={p.title} onChange={e=>{const u=[...extraPages2];u[i]={...u[i],title:e.target.value};setExtraPages2(u);}}
+                        placeholder="Titel (optioneel)" style={{...C.input,marginBottom:8,fontSize:13}}/>
+                      <textarea value={p.content} onChange={e=>{const u=[...extraPages2];u[i]={...u[i],content:e.target.value};setExtraPages2(u);}}
+                        placeholder="Inhoud / tekst van de pagina" rows={4}
+                        style={{...C.input,resize:"vertical",fontFamily:"inherit",lineHeight:1.6,fontSize:13}}/>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {tab==="message"&&(
+              <div>
+                <div style={{fontSize:13,color:"#475569",marginBottom:10}}>Gebruik <strong>{"{voornaam}"}</strong> voor de voornaam van de aanmelder.</div>
+                <textarea value={thankYou} onChange={e=>setThankYou(e.target.value)}
+                  rows={10} style={{...C.input,resize:"vertical",fontFamily:"inherit",lineHeight:1.7,fontSize:14}}/>
+                <button onClick={()=>setThankYou(DEFAULT_THANK_YOU)}
+                  style={{marginTop:8,padding:"7px 14px",borderRadius:8,border:"1px solid #e2e8f0",background:"#fff",color:"#475569",fontSize:13,cursor:"pointer"}}>
+                  ↺ Standaard herstellen
+                </button>
+              </div>
+            )}
+            {tab==="export"&&(
+              <div>
+                <div style={{fontSize:14,color:"#374151",marginBottom:16}}>
+                  {submissions?.length>0?`${submissions.length} aanmelding(en) beschikbaar.`:"Nog geen aanmeldingen in deze sessie."}
+                </div>
+                {submissions?.length>0&&(
+                  <>
+                    <button onClick={()=>exportCSV(submissions)} style={{
+                      padding:"10px 22px",borderRadius:9,border:"none",background:"#16a34a",
+                      color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:16,
+                    }}>📥 Download CSV (Excel)</button>
+                    <div style={{overflowX:"auto"}}>
+                      <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                        <thead>
+                          <tr style={{background:"#f1f5f9"}}>
+                            {["Naam","Telefoon","Adres","Apparaat","Datum"].map(h=>(
+                              <th key={h} style={{padding:"8px 10px",textAlign:"left",borderBottom:"1px solid #e2e8f0",color:"#475569"}}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {submissions.map((r,i)=>(
+                            <tr key={i} style={{borderBottom:"1px solid #f1f5f9"}}>
+                              <td style={{padding:"7px 10px"}}>{r.voornaam} {r.achternaam}</td>
+                              <td style={{padding:"7px 10px"}}>{r.telefoon}</td>
+                              <td style={{padding:"7px 10px"}}>{r.straatnaam} {r.huisnummer}</td>
+                              <td style={{padding:"7px 10px"}}>{r.apparaat}</td>
+                              <td style={{padding:"7px 10px"}}>{r.timestamp}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function App() {
+      const [db,setDb]           = useState(null);
+      const [dbStatus,setDbSt]   = useState("idle");
+      const fileRef              = useRef();
+      const [cycleOpen,setCycleOpen]   = useState(false);
+      const [cycleStart,setCycleStart] = useState("");
+      const [cycleEnd,setCycleEnd]     = useState("");
+      const [devices,setDevices]       = useState(DEFAULT_DEVICES);
+      const [thankYou,setThankYou]     = useState(DEFAULT_THANK_YOU);
+      const [consentText,setConsentText] = useState(DEFAULT_CONSENT_TEXT);
+      const [criteria,setCriteria]       = useState(DEFAULT_CRITERIA);
+      const [allowMultiAddr,setAllowMultiAddr] = useState(false);
+      const [exemptAddrs,setExemptAddrs]       = useState([]);
+      const [showAdmin,setShowAdmin]   = useState(false);
+
+      // Pre-form flow: "consent" → "criteria" → extraPages1 → "form"
+      const [preStep,setPreStep] = useState("consent");
+      const [consentAnswer,setConsentAnswer] = useState(null);
+      const [criteriaAnswers,setCriteriaAnswers] = useState([null,null,null,null]);
+      const [preError,setPreError] = useState("");
+      const [extraPages1,setExtraPages1] = useState([]); // after criteria, before form
+      const [extraPages2,setExtraPages2] = useState([]); // after apparaat, before review
+      const [extraPageIdx,setExtraPageIdx] = useState(0); // current extra page index
+      const [showReview,setShowReview] = useState(false); // review screen
+      const [reviewConfirmed,setReviewConfirmed] = useState(false); // confirmed review
+      const [step,setStep]     = useState(1);
+      const [errors,setErrors] = useState({});
+      const [blocked,setBlocked] = useState(null);
+      const [done,setDone]     = useState(false);
+      const [form,setForm]     = useState(EMPTY);
+      const [submissions,setSubs] = useState([]);
+      const [addrStatus,setAddrSt] = useState("idle");
+      const [addrMsg,setAddrMsg]   = useState("");
+      const [addrOk,setAddrOk]     = useState(false);
+      const [stadspasStatus,setStadspasStatus] = useState(null);
+      const [stadspasChecking,setStadspasChecking] = useState(false);
+
+      const upd = (f,v) => {
+        setForm(p=>({...p,[f]:v}));
+        setErrors(p=>({...p,[f]:""}));
+        if(["straatnaam","huisnummer"].includes(f)){
+          setAddrOk(false); setAddrSt("idle"); setAddrMsg("");
+        }
+        if(f==="stadspas") setStadspasStatus(null);
+      };
+
+      const handleCheckStadspas = async () => {
+        setStadspasChecking(true); setStadspasStatus(null);
+        const result = await checkStadspas(form.stadspas);
+        setStadspasStatus(result);
+        setStadspasChecking(false);
+      };
+
+      const handleFile = async (e) => {
+        const file=e.target.files[0]; if(!file) return;
+        setDbSt("loading");
+        const res=await parseXLSXFile(file);
+        if(res.ok){setDb({rows:res.rows,name:file.name});setDbSt("ok");}
+        else setDbSt("error");
+        e.target.value="";
+      };
+
+      const checkAddress = async () => {
+        const postcode = getPostcode(form);
+        if(!form.straatnaam.trim()||!form.huisnummer.trim()||!validPostcode(form)){
+          setAddrMsg("Vul eerst straatnaam, huisnummer en postcode in."); setAddrSt("error"); return;
+        }
+        setAddrSt("checking"); setAddrMsg(""); setAddrOk(false);
+        const result = await verifyAddress(form.straatnaam,form.huisnummer,postcode);
+        if(result.ok){
+          setAddrOk(true); setAddrSt("ok");
+          setAddrMsg(`✅ Adres bevestigd: ${result.formatted.straat} ${result.formatted.huisnr}, ${result.formatted.postcode} ${result.formatted.plaats}`);
+          // Update pc1/pc2 from confirmed postcode
+          if(result.formatted.postcode){
+            const pc = result.formatted.postcode.replace(/\s/g,"").toUpperCase();
+            upd("pc1", pc.slice(0,4));
+            upd("pc2", pc.slice(4,6));
+          }
+        } else {
+          setAddrOk(false); setAddrSt("error"); setAddrMsg(`❌ ${result.error}`);
+        }
+      };
+
+      const next = async () => {
+        if(!cycleOpen){ setBlocked({type:"cycle",message:"De aanmeldingsperiode is momenteel gesloten. Kom later terug."}); return; }
+        let errs={};
+        if(step===1){
+          errs=v1(form);
+          if(!Object.keys(errs).length){
+            // Zoek in Supabase via Edge Function
+            let result = { status:"none" };
+            result = await lookupPersonSupabase(form.voornaam,form.achternaam,form.geb_dag,form.geb_maand,form.geb_jaar) || { status:"none" };
+
+            // Manually excluded (111111)
+            if(result.status==="excluded"){
+              setBlocked({type:"excluded",message:"U heeft eerder al een apparaat ontvangen en komt niet in aanmerking voor een nieuw apparaat. Neem contact op met onze organisatie voor meer informatie."}); return;
+            }
+
+            if(result.status==="received" && result.monthsAgo<36){
+              const ds=result.date?result.date.toLocaleDateString("nl-NL"):"onbekend";
+              const eligible=result.date?new Date(result.date.getFullYear()+3,result.date.getMonth(),result.date.getDate()).toLocaleDateString("nl-NL"):"";
+              setBlocked({type:"received_recent",message:`U heeft op ${ds} al een apparaat ontvangen. U kunt zich pas na ${eligible} opnieuw aanmelden.`}); return;
+            }
+            if(result.status==="not_received" && result.monthsAgo<6){
+              const ds=result.date?result.date.toLocaleDateString("nl-NL"):"onbekend";
+              const eligible=result.date?new Date(result.date.getFullYear(),result.date.getMonth()+6,result.date.getDate()).toLocaleDateString("nl-NL"):"";
+              setBlocked({type:"not_received",message:`U bent op ${ds} geselecteerd maar heeft het apparaat niet opgehaald. U kunt zich pas na ${eligible} opnieuw aanmelden.`}); return;
+            }
+            const csDate=cycleStart?new Date(cycleStart):null;
+            const ceDate=cycleEnd?new Date(cycleEnd):null;
+            if(csDate&&ceDate){
+              const n=(s)=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");
+              const dup=db.rows.some(r=>{
+                if(n(r.voornaam)!==n(form.voornaam)||n(r.achternaam)!==n(form.achternaam)) return false;
+                const d=parseDate(r.uitdelen_datum);
+                return d&&d>=csDate&&d<=ceDate;
+              });
+              if(dup){setBlocked({type:"same_cycle",message:"U heeft zich al aangemeld in de huidige aanmeldingsperiode. U kunt zich niet meerdere keren aanmelden per periode."}); return;}
+            }
+          }
+        }
+        else if(step===2) errs=v2(form);
+        else if(step===3){
+          errs=v3(form,addrOk);
+          // Check address duplicate if no other errors and addrOk
+          if(!Object.keys(errs).length && addrOk && !allowMultiAddr){
+            const straatNorm = form.straatnaam.trim().toLowerCase();
+            const huisNorm   = form.huisnummer.trim().toLowerCase();
+
+            // Check if exempt
+            const adresInput = straatNorm + " " + huisNorm;
+            const isExempt = exemptAddrs.some(e => {
+              const en = e.trim().toLowerCase();
+              return en.length > 0 && adresInput.includes(en);
+            });
+
+            if(!isExempt){
+              // Check DB: Adres column contains "Straatnaam Huisnummer"
+              const dbDup = db ? db.rows.some(r => {
+                const dbAdres = String(r.adres||"").trim().toLowerCase();
+                if(!dbAdres) return false;
+                return dbAdres.includes(straatNorm) && dbAdres.includes(huisNorm);
+              }) : false;
+
+              // Check current session
+              const sessionDup = submissions.some(s =>
+                s.straatnaam.trim().toLowerCase() === straatNorm &&
+                s.huisnummer.trim().toLowerCase() === huisNorm
+              );
+
+              if(dbDup || sessionDup){
+                setBlocked({type:"same_cycle",
+                  message:`Er is al een aanmelding voor ${form.straatnaam} ${form.huisnummer}. Neem contact op als u denkt dat dit een fout is.`});
+                return;
+              }
+            }
+          }
+        }
+        else if(step===4){
+          errs=v4(form);
+          // If API enabled and stadspas not verified or failed → block
+          if(!Object.keys(errs).length && INTERSOLVE_ENABLED){
+            if(!stadspasStatus){ errs.stadspas="Controleer eerst uw Stadspas via de knop hieronder"; }
+            else if(!stadspasStatus.ok){ errs.stadspas=stadspasStatus.message; }
+          }
+        }
+        else if(step===5){
+          errs=v5(form);
+          if(!Object.keys(errs).length){
+            // After apparaat → go to extra pages 2 (if any), then review
+            if(extraPages2.length > 0){
+              setPreStep("extra2"); setExtraPageIdx(0);
+            } else {
+              setPreStep("review");
+            }
+            return;
+          }
+        }
+        if(Object.keys(errs).length){setErrors(errs);return;}
+        setStep(s=>s+1);
+      };
+
+      const reset=()=>{setForm(EMPTY);setStep(1);setErrors({});setBlocked(null);setDone(false);setAddrOk(false);setAddrSt("idle");setAddrMsg("");setPreStep("consent");setConsentAnswer(null);setCriteriaAnswers([null,null,null,null]);setPreError("");setExtraPageIdx(0);setShowReview(false);setReviewConfirmed(false);setStadspasStatus(null);setStadspasChecking(false);};
+
+      const CardHeader=()=>(
+        <div style={{...C.header,position:"relative"}}>
+          <div style={C.logoRow}>
+            <span style={{fontSize:34}}>💻</span>
+            <div><div style={C.orgName}>Apparaat aanvraag bij Cyberbank</div></div>
+          </div>
+          {/* Discreet admin trigger — hidden in header corner */}
+          {!adminAuth ? (
+            <button onClick={openLogin} style={{
+              position:"absolute",top:8,right:10,
+              background:"none",border:"none",color:"rgba(255,255,255,0.2)",
+              fontSize:14,cursor:"pointer",padding:"4px 6px",lineHeight:1,
+            }}>⚙</button>
+          ) : (
+            <button onClick={handleAdminLogout} style={{
+              position:"absolute",top:8,right:10,
+              background:"rgba(255,255,255,0.15)",border:"none",color:"#fff",
+              fontSize:11,cursor:"pointer",padding:"4px 8px",borderRadius:6,
+            }}>🔐 Uitloggen</button>
+          )}
+        </div>
+      );
+
+      // ── TOTP 2FA Implementation ─────────────────────────────────────
+      const TOTP_SECRET    = "JBSWY3DPEHPK3PXP"; // ← غيّر هذا المفتاح
+      const ADMIN_PASSWORD = "Cyberbank2025";      // ← غيّر كلمة المرور
+
+      const base32Decode = (s) => {
+        const CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+        s = s.toUpperCase().replace(/=+$/,"");
+        let bits=0, val=0;
+        const out=[];
+        for(const c of s){ val=(val<<5)|CHARS.indexOf(c); bits+=5; if(bits>=8){out.push((val>>>(bits-8))&255);bits-=8;} }
+        return new Uint8Array(out);
+      };
+
+      const getTOTP = async (secret, offset=0) => {
+        const key = base32Decode(secret);
+        const t   = Math.floor(Date.now()/1000/30) + offset;
+        const tb  = new DataView(new ArrayBuffer(8));
+        tb.setUint32(4, t, false);
+        const ck  = await crypto.subtle.importKey("raw",key,{name:"HMAC",hash:"SHA-1"},false,["sign"]);
+        const sig = new Uint8Array(await crypto.subtle.sign("HMAC",ck,tb.buffer));
+        const off = sig[19]&0xf;
+        const code = ((sig[off]&0x7f)<<24|(sig[off+1]&0xff)<<16|(sig[off+2]&0xff)<<8|(sig[off+3]&0xff))%1000000;
+        return String(code).padStart(6,"0");
+      };
+
+      const [adminAuth,  setAdminAuth]  = useState(false);
+      const [showPwBox,  setShowPwBox]  = useState(false);
+      const [loginStep,  setLoginStep]  = useState(1);
+      const [pwInput,    setPwInput]    = useState("");
+      const [totpInput,  setTotpInput]  = useState("");
+      const [loginError, setLoginError] = useState("");
+      const [totpTimer,  setTotpTimer]  = useState(30);
+
+      React.useEffect(() => {
+        if(!showPwBox || loginStep!==2) return;
+        const tick = () => setTotpTimer(30-(Math.floor(Date.now()/1000)%30));
+        tick();
+        const iv = setInterval(tick,1000);
+        return ()=>clearInterval(iv);
+      }, [showPwBox, loginStep]);
+
+      const handleStep1 = () => {
+        if(pwInput.trim() === ADMIN_PASSWORD){
+          setLoginStep(2); setPwInput(""); setLoginError("");
+        } else {
+          setLoginError("Onjuist wachtwoord"); setPwInput("");
+        }
+      };
+
+      const handleStep2 = async () => {
+        const c0 = await getTOTP(TOTP_SECRET,  0);
+        const c1 = await getTOTP(TOTP_SECRET, -1);
+        if(totpInput===c0 || totpInput===c1){
+          setAdminAuth(true); setShowPwBox(false); setShowAdmin(true);
+          setTotpInput(""); setLoginError(""); setLoginStep(1);
+        } else {
+          setLoginError("Onjuiste code — probeer opnieuw"); setTotpInput("");
+        }
+      };
+
+      const handleAdminLogout = () => {
+        setAdminAuth(false); setShowAdmin(false);
+        setLoginStep(1); setPwInput(""); setTotpInput(""); setLoginError("");
+        setShowPwBox(false);
+      };
+
+      const openLogin = () => {
+        setShowPwBox(prev => {
+          if(!prev){ setLoginStep(1); setPwInput(""); setTotpInput(""); setLoginError(""); }
+          return !prev;
+        });
+      };
+
+      return (
+        <div style={C.page}>
+          {/* Admin bar — only after login */}
+          {adminAuth && (
+            <div style={C.adminBar}>
+              <span style={C.adminTag}>⚙ Beheer</span>
+              <div style={C.adminMid}>
+                {SUPABASE_ENABLED
+                  ? <span style={C.dbOk}>✅ Supabase verbonden</span>
+                  : <span style={C.dbWarn}>⚠ Supabase niet actief</span>
+                }
+              </div>
+
+              <button style={{...C.adminBtn,background:showAdmin?"#7c3aed":"#4f46e5"}} onClick={()=>setShowAdmin(p=>!p)}>
+                {showAdmin?"✕ Sluiten":"⚙ Instellingen"}
+              </button>
+              {submissions.length>0&&<button style={{...C.adminBtn,background:"#16a34a"}} onClick={()=>exportCSV(submissions)}>📥 Export ({submissions.length})</button>}
+            </div>
+          )}
+
+          {adminAuth && showAdmin && <AdminPanels {...{cycleOpen,setCycleOpen,cycleStart,setCycleStart,cycleEnd,setCycleEnd,devices,setDevices,thankYou,setThankYou,submissions,allowMultiAddr,setAllowMultiAddr,exemptAddrs,setExemptAddrs,consentText,setConsentText,criteria,setCriteria,extraPages1,setExtraPages1,extraPages2,setExtraPages2}}/>}
+
+          <div style={C.card}>
+            <CardHeader/>
+            {/* Login box inside card */}
+            {showPwBox && !adminAuth && (
+              <div style={{padding:"20px 24px",borderBottom:"1px solid #f1f5f9"}}>
+                {loginStep===1 && (
+                  <>
+                    <div style={{fontSize:14,fontWeight:700,color:"#1e293b",marginBottom:4}}>🔐 Beheerderstoegang</div>
+                    <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>Stap 1 van 2 — Wachtwoord</div>
+                    <div style={{display:"flex",gap:8}}>
+                      <input type="password" value={pwInput}
+                        onChange={e=>{setPwInput(e.target.value);setLoginError("");}}
+                        onKeyDown={e=>e.key==="Enter"&&handleStep1()}
+                        placeholder="Wachtwoord invoeren" autoFocus
+                        style={{...C.input,flex:1,borderColor:loginError?"#ef4444":"#cbd5e1"}}/>
+                      <button onClick={handleStep1} style={{
+                        padding:"10px 16px",borderRadius:9,border:"none",
+                        background:"#1d4ed8",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer",
+                      }}>→</button>
+                    </div>
+                    {loginError&&<div style={{fontSize:12,color:"#ef4444",marginTop:6}}>⚠ {loginError}</div>}
+                  </>
+                )}
+                {loginStep===2 && (
+                  <>
+                    <div style={{fontSize:14,fontWeight:700,color:"#1e293b",marginBottom:4}}>📱 Verificatiecode</div>
+                    <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>Stap 2 van 2 — Voer de 6-cijferige code in uit uw Authenticator app</div>
+                    <div style={{display:"flex",gap:8}}>
+                      <input type="text" value={totpInput}
+                        onChange={e=>{setTotpInput(e.target.value.replace(/\D/g,"").slice(0,6));setLoginError("");}}
+                        onKeyDown={e=>e.key==="Enter"&&totpInput.length===6&&handleStep2()}
+                        placeholder="000000" maxLength={6} autoFocus
+                        style={{...C.input,flex:1,textAlign:"center",fontSize:20,letterSpacing:6,
+                          borderColor:loginError?"#ef4444":"#cbd5e1"}}/>
+                      <button onClick={handleStep2} disabled={totpInput.length!==6} style={{
+                        padding:"10px 16px",borderRadius:9,border:"none",
+                        background:totpInput.length===6?"#1d4ed8":"#94a3b8",
+                        color:"#fff",fontWeight:700,fontSize:14,cursor:totpInput.length===6?"pointer":"default",
+                      }}>✓</button>
+                    </div>
+                    {loginError&&<div style={{fontSize:12,color:"#ef4444",marginTop:6}}>⚠ {loginError}</div>}
+                    <div style={{display:"flex",justifyContent:"space-between",marginTop:10}}>
+                      <button onClick={()=>{setLoginStep(1);setLoginError("");}} style={{
+                        background:"none",border:"none",color:"#64748b",fontSize:12,cursor:"pointer",
+                      }}>← Terug</button>
+                      <span style={{fontSize:12,color:totpTimer<10?"#ef4444":"#94a3b8"}}>⏱ {totpTimer}s</span>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            {blocked ? <BlockedScreen blocked={blocked} onBack={reset}/> :
+             !cycleOpen ? (
+              <div style={C.center}>
+                <div style={{fontSize:48,marginBottom:14}}>🔒</div>
+                <div style={{fontSize:20,fontWeight:700,color:"#b45309",marginBottom:10}}>Aanmelding gesloten</div>
+                <div style={{fontSize:15,color:"#374151",lineHeight:1.7}}>De aanmeldingsperiode is momenteel gesloten.<br/>Kom later terug voor de volgende periode.</div>
+                {cycleStart&&cycleEnd&&<div style={{marginTop:16,fontSize:13,color:"#64748b"}}>Periode: {new Date(cycleStart).toLocaleDateString("nl-NL")} – {new Date(cycleEnd).toLocaleDateString("nl-NL")}</div>}
+              </div>
+             ) : done ? <SuccessView form={form} devices={devices} thankYou={thankYou} onReset={reset}/> :
+
+             // ── Pre-form: Consent page ──
+             preStep==="consent" ? (
+              <div style={{padding:"32px 28px"}}>
+                <div style={{fontSize:18,fontWeight:700,color:"#1e293b",marginBottom:16}}>📋 Toestemming gegevensverwerking</div>
+                <div style={{fontSize:14,color:"#374151",lineHeight:1.8,marginBottom:24,whiteSpace:"pre-wrap"}}>{consentText}</div>
+                <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:16}}>
+                  {[{val:true,label:"✅ Ja, ik geef toestemming"},{val:false,label:"❌ Nee, ik geef geen toestemming"}].map(opt=>(
+                    <button key={String(opt.val)} onClick={()=>{setConsentAnswer(opt.val);setPreError("");}} style={{
+                      padding:"14px 20px",borderRadius:12,border:"2px solid",textAlign:"left",cursor:"pointer",fontSize:15,fontWeight:600,
+                      borderColor:consentAnswer===opt.val?(opt.val?"#16a34a":"#dc2626"):"#e2e8f0",
+                      background:consentAnswer===opt.val?(opt.val?"#f0fdf4":"#fff1f2"):"#fff",
+                      color:consentAnswer===opt.val?(opt.val?"#15803d":"#dc2626"):"#374151",
+                    }}>{opt.label}</button>
+                  ))}
+                </div>
+                {preError&&<div style={{fontSize:13,color:"#ef4444",marginBottom:12}}>⚠ {preError}</div>}
+                {consentAnswer===false&&(
+                  <div style={{background:"#fff1f2",border:"1px solid #fecaca",borderRadius:10,padding:"14px",fontSize:14,color:"#dc2626",marginBottom:16}}>
+                    Helaas kunt u niet verder zonder toestemming te geven voor de verwerking van uw gegevens.
+                  </div>
+                )}
+                <button onClick={()=>{
+                  if(consentAnswer===null){setPreError("Maak een keuze om verder te gaan.");return;}
+                  if(consentAnswer===false) return;
+                  setPreStep("criteria"); setPreError("");
+                }} disabled={consentAnswer!==true} style={{
+                  padding:"12px 28px",borderRadius:9,border:"none",fontWeight:700,fontSize:15,cursor:consentAnswer===true?"pointer":"default",
+                  background:consentAnswer===true?"#1d4ed8":"#94a3b8",color:"#fff",
+                }}>Volgende →</button>
+              </div>
+             ) :
+
+             // ── Pre-form: Criteria page ──
+             preStep==="criteria" ? (
+              <div style={{padding:"32px 28px"}}>
+                <div style={{fontSize:18,fontWeight:700,color:"#1e293b",marginBottom:8}}>✅ Kom jij in aanmerking?</div>
+                <div style={{fontSize:14,color:"#64748b",marginBottom:20}}>Beantwoord alle vragen met 'Ja' om verder te gaan.</div>
+                {criteria.map((q,i)=>(
+                  <div key={i} style={{marginBottom:20}}>
+                    <div style={{fontSize:14,fontWeight:600,color:"#1e293b",marginBottom:10}}>
+                      {i+1}. {q}
+                    </div>
+                    <div style={{display:"flex",gap:10}}>
+                      {["Ja","Nee"].map(opt=>{
+                        const selected = criteriaAnswers[i]===(opt==="Ja");
+                        const isCorrect = opt==="Ja"; // all must be Ja
+                        return(
+                          <button key={opt} onClick={()=>{
+                            const updated=[...criteriaAnswers]; updated[i]=(opt==="Ja"); setCriteriaAnswers(updated); setPreError("");
+                          }} style={{
+                            padding:"10px 24px",borderRadius:9,border:"2px solid",cursor:"pointer",fontSize:14,fontWeight:700,
+                            borderColor:selected?(isCorrect?"#16a34a":"#dc2626"):"#e2e8f0",
+                            background:selected?(isCorrect?"#f0fdf4":"#fff1f2"):"#fff",
+                            color:selected?(isCorrect?"#15803d":"#dc2626"):"#374151",
+                          }}>{opt}</button>
+                        );
+                      })}
+                    </div>
+                    {criteriaAnswers[i]===false&&(
+                      <div style={{fontSize:12,color:"#dc2626",marginTop:6}}>
+                        ⚠ Helaas voldoet u niet aan deze voorwaarde.
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {preError&&<div style={{fontSize:13,color:"#ef4444",marginBottom:12}}>⚠ {preError}</div>}
+                {criteriaAnswers.some(a=>a===false)&&(
+                  <div style={{background:"#fff1f2",border:"1px solid #fecaca",borderRadius:10,padding:"14px",fontSize:14,color:"#dc2626",marginBottom:16}}>
+                    Helaas komt u niet in aanmerking voor een apparaat van Cyberbank. Heeft u vragen? Neem contact op met onze organisatie.
+                  </div>
+                )}
+                <div style={{display:"flex",gap:12,marginTop:8}}>
+                  <button onClick={()=>{setPreStep("consent");setPreError("");}} style={{
+                    padding:"12px 20px",borderRadius:9,border:"1.5px solid #e2e8f0",background:"#fff",color:"#475569",fontSize:14,fontWeight:600,cursor:"pointer",
+                  }}>← Terug</button>
+                  <button onClick={()=>{
+                    if(criteriaAnswers.some(a=>a===null)){setPreError("Beantwoord alle vragen om verder te gaan.");return;}
+                    if(criteriaAnswers.some(a=>a===false)){setPreError("U kunt niet verder omdat u niet aan alle voorwaarden voldoet.");return;}
+                    if(extraPages1.length > 0){ setPreStep("extra1"); setExtraPageIdx(0); }
+                    else { setPreStep("form"); }
+                    setPreError("");
+                  }} style={{
+                    padding:"12px 28px",borderRadius:9,border:"none",fontWeight:700,fontSize:15,cursor:"pointer",
+                    background:"#1d4ed8",color:"#fff",
+                  }}>Verder met aanmelden →</button>
+                </div>
+              </div>
+             ) :
+
+             // ── Extra pages 1 (after criteria, before form) ──
+             preStep==="extra1" ? (
+              <ExtraPageScreen
+                pages={extraPages1}
+                idx={extraPageIdx}
+                onNext={()=>{
+                  if(extraPageIdx < extraPages1.length-1){ setExtraPageIdx(i=>i+1); }
+                  else { setPreStep("form"); setExtraPageIdx(0); }
+                }}
+                onBack={()=>{
+                  if(extraPageIdx > 0){ setExtraPageIdx(i=>i-1); }
+                  else { setPreStep("criteria"); }
+                }}
+              />
+             ) :
+
+             // ── Extra pages 2 (after apparaat, before review) ──
+             preStep==="extra2" ? (
+              <ExtraPageScreen
+                pages={extraPages2}
+                idx={extraPageIdx}
+                onNext={()=>{
+                  if(extraPageIdx < extraPages2.length-1){ setExtraPageIdx(i=>i+1); }
+                  else { setPreStep("review"); setExtraPageIdx(0); }
+                }}
+                onBack={()=>{
+                  if(extraPageIdx > 0){ setExtraPageIdx(i=>i-1); }
+                  else { setPreStep("form"); setStep(5); }
+                }}
+              />
+             ) :
+
+             // ── Review screen ──
+             preStep==="review" ? (
+              <ReviewScreen
+                form={form}
+                devices={devices}
+                onConfirm={()=>setPreStep("submit")}
+                onBack={()=>{
+                  if(extraPages2.length > 0){ setPreStep("extra2"); setExtraPageIdx(extraPages2.length-1); }
+                  else { setPreStep("form"); setStep(5); }
+                }}
+              />
+             ) :
+
+             // ── Submit screen ──
+             preStep==="submit" ? (
+              <SubmitScreen
+                onSubmit={async ()=>{
+                  const dev=devices.find(d=>d.id===form.apparaat);
+                  const submission={...form,apparaat:dev?dev.label:form.apparaat,timestamp:new Date().toLocaleString("nl-NL")};
+                  // Sla op in Supabase
+                  await saveToSupabase(submission);
+                  // Sla ook lokaal op in sessie
+                  setSubs(p=>[...p,submission]);
+                  setDone(true);
+                }}
+                onBack={()=>setPreStep("review")}
+              />
+             ) : (
+              <>
+                {cycleStart&&cycleEnd&&(
+                  <div style={{background:"#f0fdf4",borderBottom:"1px solid #bbf7d0",padding:"8px 32px",fontSize:13,color:"#15803d",fontWeight:600}}>
+                    📅 Aanmeldingsperiode: {new Date(cycleStart).toLocaleDateString("nl-NL")} – {new Date(cycleEnd).toLocaleDateString("nl-NL")}
+                  </div>
+                )}
+                <div style={C.stepper}>
+                  {STEPS.map((_,i)=>(
+                    <div key={i} style={{display:"flex",alignItems:"center"}}>
+                      <div style={{...C.dot,background:step>i+1?"#22c55e":step===i+1?"#1d4ed8":"#e2e8f0",color:step>=i+1?"#fff":"#94a3b8",transform:step===i+1?"scale(1.18)":"scale(1)"}}>{step>i+1?"✓":i+1}</div>
+                      {i<STEPS.length-1&&<div style={{...C.line,background:step>i+1?"#22c55e":"#e2e8f0"}}/>}
+                    </div>
+                  ))}
+                </div>
+                <div style={C.stepMeta}>
+                  <div style={C.stepTitle}>{STEPS[step-1].title}</div>
+                  <div style={C.stepSub}>Stap {step} van {STEPS.length} — {STEPS[step-1].sub}</div>
+                </div>
+                <div style={C.body}>
+                  {step===1&&<Step1 form={form} upd={upd} errors={errors}/>}
+                  {step===2&&<Step2 form={form} upd={upd} errors={errors}/>}
+                  {step===3&&<Step3 form={form} upd={upd} errors={errors} addrStatus={addrStatus} addrMsg={addrMsg} addrOk={addrOk} onCheck={checkAddress}/>}
+                  {step===4&&<Step4 form={form} upd={upd} errors={errors} stadspasStatus={stadspasStatus} stadspasChecking={stadspasChecking} onCheckStadspas={handleCheckStadspas}/>}
+                  {step===5&&<Step5 form={form} upd={upd} errors={errors} devices={devices}/>}
+                </div>
+                <div style={C.btnRow}>
+                  {step>1&&<button style={C.backBtn} onClick={()=>{setStep(s=>s-1);setErrors({});}}>← Terug</button>}
+                  {step===1&&<button style={C.backBtn} onClick={()=>{
+                    if(extraPages1.length>0){setPreStep("extra1");setExtraPageIdx(extraPages1.length-1);}
+                    else setPreStep("criteria");
+                  }}>← Terug</button>}
+                  <button style={C.nextBtn} onClick={next}>Volgende →</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ── Extra page screen ─────────────────────────────────────────────
+    function ExtraPageScreen({pages,idx,onNext,onBack}) {
+      const page = pages[idx];
+      if(!page) return null;
+      return (
+        <div style={{padding:"32px 28px"}}>
+          {pages.length > 1 && (
+            <div style={{fontSize:12,color:"#94a3b8",marginBottom:12}}>
+              {idx+1} / {pages.length}
+            </div>
+          )}
+          {page.title && (
+            <div style={{fontSize:20,fontWeight:700,color:"#1e293b",marginBottom:16}}>{page.title}</div>
+          )}
+          <div style={{fontSize:14,color:"#374151",lineHeight:1.8,whiteSpace:"pre-wrap",marginBottom:28}}>
+            {page.content}
+          </div>
+          <div style={{display:"flex",gap:12}}>
+            <button style={C.backBtn} onClick={onBack}>← Terug</button>
+            <button style={C.nextBtn} onClick={onNext}>Volgende →</button>
+          </div>
+        </div>
+      );
+    }
+
+    // ── Review screen ─────────────────────────────────────────────────
+    function ReviewScreen({form,devices,onConfirm,onBack}) {
+      const dev = devices.find(d=>d.id===form.apparaat);
+      const pc  = form.pc1&&form.pc2 ? form.pc1+" "+form.pc2 : "";
+      const rows = [
+        ["👤","Voornaam",    form.voornaam],
+        ["👤","Achternaam",  form.achternaam],
+        ["📅","Geboortedatum",`${form.geb_dag} ${form.geb_maand} ${form.geb_jaar}`],
+        ["📱","Telefoon",    form.telefoon],
+        ["📧","E-mail",      form.email],
+        ["📍","Straatnaam",  form.straatnaam],
+        ["🏠","Huisnummer",  form.huisnummer],
+        ["📮","Postcode",    pc],
+        ["🏙","Stadsdeel",   form.stadsdeel],
+        ["🪪","Stadspas",    form.stadspas],
+        ["💻","Apparaat",    dev?`${dev.icon} ${dev.label}`:"—"],
+      ];
+      return (
+        <div style={{padding:"28px"}}>
+          <div style={{fontSize:18,fontWeight:700,color:"#1e293b",marginBottom:6}}>👁 Controleer uw gegevens</div>
+          <div style={{fontSize:14,color:"#64748b",marginBottom:20}}>
+            Zijn alle gegevens correct? Controleer ze zorgvuldig voordat u verder gaat.
+          </div>
+          <div style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:12,padding:"16px",marginBottom:20}}>
+            {rows.map(([icon,label,val])=>(
+              <div key={label} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:"1px solid #f1f5f9",gap:12}}>
+                <span style={{color:"#64748b",fontSize:13,flexShrink:0}}>{icon} {label}</span>
+                <span style={{fontWeight:600,fontSize:13,textAlign:"right"}}>{val||"—"}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"14px",fontSize:14,color:"#92400e",marginBottom:20}}>
+            ⚠ Controleer of alle gegevens correct zijn. Na bevestiging kunt u ze niet meer wijzigen.
+          </div>
+          <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+            <button style={C.backBtn} onClick={onBack}>← Nee, ik wil iets aanpassen</button>
+            <button style={C.nextBtn} onClick={onConfirm}>✅ Ja, alle gegevens zijn correct</button>
+          </div>
+        </div>
+      );
+    }
+
+    // ── Submit screen ─────────────────────────────────────────────────
+    function SubmitScreen({onSubmit,onBack}) {
+      return (
+        <div style={{...C.center,padding:"40px 28px"}}>
+          <div style={{fontSize:48,marginBottom:16}}>📤</div>
+          <div style={{fontSize:20,fontWeight:700,color:"#1e293b",marginBottom:12}}>Aanmelding versturen</div>
+          <div style={{fontSize:15,color:"#374151",lineHeight:1.7,marginBottom:28}}>
+            Uw gegevens zijn gecontroleerd en klaar om te worden verstuurd.<br/>
+            Druk op de knop hieronder om uw aanmelding in te dienen.
+          </div>
+          <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
+            <button style={C.backBtn} onClick={onBack}>← Terug</button>
+            <button onClick={onSubmit} style={{
+              padding:"14px 32px",borderRadius:12,border:"none",
+              background:"linear-gradient(135deg,#16a34a,#22c55e)",
+              color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",
+              boxShadow:"0 4px 16px rgba(22,163,74,0.3)",
+            }}>🚀 Aanmelding indienen</button>
+          </div>
+        </div>
+      );
+    }
+
+    const C={
+      page:{minHeight:"100vh",background:"linear-gradient(135deg,#f0f4ff,#e8f0fe 50%,#f0f0ff)",display:"flex",flexDirection:"column",alignItems:"center",padding:"0 16px 48px",fontFamily:"'Segoe UI',system-ui,sans-serif"},
+      adminBar:{width:"100%",maxWidth:680,background:"#0f172a",borderRadius:"0 0 16px 16px",padding:"10px 18px",display:"flex",alignItems:"center",flexWrap:"wrap",gap:10,marginBottom:16},
+      adminTag:{color:"#64748b",fontSize:13,fontWeight:600,whiteSpace:"nowrap"},
+      adminMid:{flex:1,display:"flex",alignItems:"center",flexWrap:"wrap",gap:8},
+      dbOk:{color:"#86efac",fontSize:12,fontWeight:600},dbErr:{color:"#fca5a5",fontSize:12},
+      dbLoad:{color:"#93c5fd",fontSize:12},dbWarn:{color:"#fcd34d",fontSize:12},
+      adminBtn:{padding:"7px 13px",borderRadius:8,border:"none",background:"#2563eb",color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"},
+      panel:{width:"100%",maxWidth:680,background:"#fff",borderRadius:16,boxShadow:"0 8px 32px rgba(0,0,0,0.1)",marginBottom:16,overflow:"hidden"},
+      devRow:{display:"flex",alignItems:"center",gap:10,marginBottom:10},
+      card:{background:"#fff",borderRadius:20,boxShadow:"0 24px 64px rgba(0,0,0,0.1)",width:"100%",maxWidth:680,overflow:"hidden"},
+      header:{background:"linear-gradient(135deg,#1d4ed8,#3b82f6)",padding:"24px 32px"},
+      logoRow:{display:"flex",alignItems:"center",gap:14},
+      orgName:{fontSize:21,fontWeight:700,color:"#fff",letterSpacing:-0.5},
+      orgSub:{fontSize:13,color:"rgba(255,255,255,0.78)",marginTop:3},
+      stepper:{display:"flex",alignItems:"center",justifyContent:"center",padding:"20px 32px 0"},
+      dot:{width:32,height:32,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:13,transition:"all .3s",flexShrink:0},
+      line:{width:24,height:3,transition:"background .3s"},
+      stepMeta:{textAlign:"center",padding:"10px 32px 0"},
+      stepTitle:{fontSize:19,fontWeight:700,color:"#1e293b"},
+      stepSub:{fontSize:12,color:"#64748b",marginTop:3},
+      body:{padding:"20px 32px 8px"},
+      two:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14},
+      label:{display:"block",fontSize:13,fontWeight:600,color:"#374151",marginBottom:5},
+      hint:{fontSize:12,color:"#6b7280",marginBottom:5},
+      input:{width:"100%",padding:"10px 13px",borderRadius:9,border:"1.5px solid #cbd5e1",fontSize:15,color:"#1e293b",outline:"none",background:"#f8fafc",boxSizing:"border-box"},
+      subLabel:{textAlign:"center",fontSize:11,color:"#94a3b8",marginTop:4},
+      err:{fontSize:12,color:"#ef4444",marginTop:5},
+      counter:{fontSize:12,marginTop:4,textAlign:"right"},
+      info:{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:9,padding:"11px 13px",fontSize:13,color:"#1d4ed8",marginTop:8},
+      btnRow:{display:"flex",gap:12,padding:"14px 32px 26px",justifyContent:"flex-end"},
+      backBtn:{padding:"11px 20px",borderRadius:9,border:"1.5px solid #e2e8f0",background:"#fff",color:"#475569",fontSize:14,fontWeight:600,cursor:"pointer"},
+      nextBtn:{padding:"11px 24px",borderRadius:9,border:"none",background:"linear-gradient(135deg,#1d4ed8,#3b82f6)",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",boxShadow:"0 4px 14px rgba(29,78,216,0.3)"},
+      center:{padding:"32px 32px",textAlign:"center"},
+      summary:{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:12,padding:"14px 16px",marginBottom:16,textAlign:"left"},
+      sumRow:{display:"flex",justifyContent:"space-between",gap:12,padding:"6px 0",borderBottom:"1px solid #f1f5f9"},
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<App/>);
+  </script>
+</body>
+</html>
