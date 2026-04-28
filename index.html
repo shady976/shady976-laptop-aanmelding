@@ -691,7 +691,7 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
     function AdminPanels({cycleOpen,setCycleOpen,cycleStart,setCycleStart,cycleEnd,setCycleEnd,devices,setDevices,thankYou,setThankYou,submissions,allowMultiAddr,setAllowMultiAddr,exemptAddrs,setExemptAddrs,consentText,setConsentText,criteria,setCriteria,extraPages1,setExtraPages1,extraPages2,setExtraPages2}) {
       const [newLabel,setNewLabel]=useState("");
       const [newIcon,setNewIcon]=useState("📦");
-      const [tab,setTab]=useState("cycle");
+      const [tab,setTab]=useState("stats");
       const addDevice=()=>{
         if(!newLabel.trim())return;
         setDevices(p=>[...p,{id:Date.now().toString(),label:newLabel.trim(),icon:newIcon,enabled:true}]);
@@ -700,7 +700,7 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
       return (
         <div style={C.panel}>
           <div style={{display:"flex",borderBottom:"1px solid #e2e8f0"}}>
-            {[["cycle","📅 Cyclus"],["devices","🖥 Apparaten"],["address","🏠 Adressen"],["pages","📄 Pagina's"],["message","✉ Bericht"],["export","📥 Export"]].map(([k,l])=>(
+            {[["stats","📊 Statistieken"],["cycle","📅 Cyclus"],["devices","🖥 Apparaten"],["address","🏠 Adressen"],["pages","📄 Pagina's"],["message","✉ Bericht"],["export","📥 Export"]].map(([k,l])=>(
               <button key={k} onClick={()=>setTab(k)} style={{
                 flex:1,padding:"12px 6px",border:"none",background:"none",cursor:"pointer",
                 fontWeight:tab===k?700:400,fontSize:12,
@@ -710,6 +710,7 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
             ))}
           </div>
           <div style={{padding:"20px 24px"}}>
+            {tab==="stats"&&<StatsTab/>}
             {tab==="cycle"&&(
               <div>
                 <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:20,flexWrap:"wrap"}}>
@@ -926,6 +927,206 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
       );
     }
 
+    function StatsTab() {
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [adminPwd, setAdminPwd] = useState("");
+  const [authenticated, setAuthenticated] = useState(false);
+  
+  const loadStats = async (pwd) => {
+    setLoading(true); setError("");
+    try {
+      const res = await fetch(`${FUNCTIONS_URL}/admin-stats`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${ANON_KEY}` },
+        body: JSON.stringify({ adminPassword: pwd })
+      });
+      if (res.status === 401) {
+        setError("Ongeldig wachtwoord");
+        setLoading(false);
+        return;
+      }
+      if (!res.ok) throw new Error("Fout bij laden");
+      const data = await res.json();
+      setStats(data);
+      setAuthenticated(true);
+    } catch (e) {
+      setError("Verbindingsfout: " + e.message);
+    }
+    setLoading(false);
+  };
+  
+  if (!authenticated) {
+    return (
+      <div style={{padding:"24px"}}>
+        <div style={{fontSize:14,fontWeight:700,color:"#1e293b",marginBottom:12}}>🔐 Statistieken vereisen extra verificatie</div>
+        <div style={{fontSize:13,color:"#64748b",marginBottom:16}}>Voer het admin wachtwoord in om statistieken te bekijken.</div>
+        <div style={{display:"flex",gap:8}}>
+          <input type="password" value={adminPwd}
+            onChange={e=>setAdminPwd(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&adminPwd&&loadStats(adminPwd)}
+            placeholder="Wachtwoord"
+            style={{flex:1,padding:"10px 13px",borderRadius:9,border:"1.5px solid #cbd5e1",fontSize:14,background:"#f8fafc"}}/>
+          <button onClick={()=>adminPwd&&loadStats(adminPwd)} disabled={loading||!adminPwd}
+            style={{padding:"10px 20px",borderRadius:9,border:"none",background:loading||!adminPwd?"#94a3b8":"#1d4ed8",color:"#fff",fontWeight:700,fontSize:14,cursor:loading||!adminPwd?"default":"pointer"}}>
+            {loading?"⏳":"🔓 Bekijk"}
+          </button>
+        </div>
+        {error&&<div style={{fontSize:12,color:"#ef4444",marginTop:8}}>⚠ {error}</div>}
+      </div>
+    );
+  }
+  
+  if (!stats) return <div style={{padding:24,textAlign:"center",color:"#64748b"}}>⏳ Laden...</div>;
+  
+  const cardStyle = {background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:12,padding:"16px"};
+  const numberStyle = {fontSize:28,fontWeight:700,color:"#1e293b",lineHeight:1};
+  const labelStyle = {fontSize:12,color:"#64748b",marginTop:6,fontWeight:600};
+  
+  const Bar = ({label, value, max, color}) => (
+    <div style={{marginBottom:8}}>
+      <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:3}}>
+        <span style={{color:"#475569",fontWeight:600}}>{label}</span>
+        <span style={{color:"#1e293b",fontWeight:700}}>{value}</span>
+      </div>
+      <div style={{background:"#e2e8f0",borderRadius:6,height:8,overflow:"hidden"}}>
+        <div style={{width:`${(value/max)*100}%`,background:color,height:"100%",transition:"width 0.3s"}}/>
+      </div>
+    </div>
+  );
+  
+  const maxDevice = Math.max(...Object.values(stats.devices), 1);
+  const maxStadsdeel = Math.max(...Object.values(stats.stadsdelen), 1);
+  
+  return (
+    <div style={{padding:"20px 24px"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <div>
+          <div style={{fontSize:16,fontWeight:700,color:"#1e293b"}}>📊 Statistieken Dashboard</div>
+          <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>Bijgewerkt: {new Date(stats.generatedAt).toLocaleString("nl-NL")}</div>
+        </div>
+        <button onClick={()=>loadStats(adminPwd)} disabled={loading} style={{padding:"6px 14px",borderRadius:8,border:"1px solid #cbd5e1",background:"#fff",fontSize:12,fontWeight:600,cursor:"pointer"}}>
+          🔄 Vernieuwen
+        </button>
+      </div>
+      
+      <div style={{fontSize:13,fontWeight:700,color:"#475569",marginBottom:10}}>📈 Laatste 24 uur</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:24}}>
+        <div style={cardStyle}>
+          <div style={{...numberStyle,color:"#16a34a"}}>{stats.overview.saved}</div>
+          <div style={labelStyle}>✅ Aanmeldingen</div>
+        </div>
+        <div style={cardStyle}>
+          <div style={{...numberStyle,color:"#2563eb"}}>{stats.overview.checked}</div>
+          <div style={labelStyle}>🔍 Naam controles</div>
+        </div>
+        <div style={cardStyle}>
+          <div style={{...numberStyle,color:"#dc2626"}}>{stats.overview.rateLimited}</div>
+          <div style={labelStyle}>🚫 Rate limited</div>
+        </div>
+        <div style={cardStyle}>
+          <div style={{...numberStyle,color:"#ea580c"}}>{stats.overview.captchaFailed}</div>
+          <div style={labelStyle}>🤖 CAPTCHA gefaald</div>
+        </div>
+      </div>
+      
+      <div style={{fontSize:13,fontWeight:700,color:"#475569",marginBottom:10}}>🖥 Apparaten (laatste 7 dagen)</div>
+      <div style={{...cardStyle,marginBottom:24}}>
+        {Object.keys(stats.devices).length === 0 ? (
+          <div style={{textAlign:"center",color:"#94a3b8",fontSize:13,padding:"12px"}}>Geen data</div>
+        ) : (
+          Object.entries(stats.devices).map(([name, count]) => (
+            <Bar key={name} label={name} value={count} max={maxDevice} color="#2563eb"/>
+          ))
+        )}
+      </div>
+      
+      <div style={{fontSize:13,fontWeight:700,color:"#475569",marginBottom:10}}>🏙 Stadsdelen (laatste 7 dagen)</div>
+      <div style={{...cardStyle,marginBottom:24}}>
+        {Object.keys(stats.stadsdelen).length === 0 ? (
+          <div style={{textAlign:"center",color:"#94a3b8",fontSize:13,padding:"12px"}}>Geen data</div>
+        ) : (
+          Object.entries(stats.stadsdelen).map(([name, count]) => (
+            <Bar key={name} label={name} value={count} max={maxStadsdeel} color="#16a34a"/>
+          ))
+        )}
+      </div>
+      
+      <div style={{fontSize:13,fontWeight:700,color:"#475569",marginBottom:10}}>📅 Dagelijkse activiteit</div>
+      <div style={{...cardStyle,marginBottom:24}}>
+        {Object.keys(stats.daily).length === 0 ? (
+          <div style={{textAlign:"center",color:"#94a3b8",fontSize:13,padding:"12px"}}>Geen data</div>
+        ) : (
+          <table style={{width:"100%",fontSize:12,borderCollapse:"collapse"}}>
+            <thead>
+              <tr style={{borderBottom:"1px solid #e2e8f0"}}>
+                <th style={{textAlign:"left",padding:"6px",color:"#64748b"}}>Datum</th>
+                <th style={{textAlign:"right",padding:"6px",color:"#64748b"}}>Aanmeldingen</th>
+                <th style={{textAlign:"right",padding:"6px",color:"#64748b"}}>Controles</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(stats.daily).sort((a,b) => b[0].localeCompare(a[0])).map(([date, counts]) => (
+                <tr key={date} style={{borderBottom:"1px solid #f1f5f9"}}>
+                  <td style={{padding:"6px"}}>{new Date(date).toLocaleDateString("nl-NL")}</td>
+                  <td style={{padding:"6px",textAlign:"right",color:"#16a34a",fontWeight:600}}>{counts.saved}</td>
+                  <td style={{padding:"6px",textAlign:"right",color:"#2563eb"}}>{counts.checked}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      
+      {stats.suspiciousIPs.length > 0 && (
+        <>
+          <div style={{fontSize:13,fontWeight:700,color:"#dc2626",marginBottom:10}}>🚨 Verdachte IPs ({stats.suspiciousIPs.length})</div>
+          <div style={{...cardStyle,marginBottom:24,background:"#fef2f2",borderColor:"#fecaca"}}>
+            <table style={{width:"100%",fontSize:12,borderCollapse:"collapse"}}>
+              <thead>
+                <tr style={{borderBottom:"1px solid #fecaca"}}>
+                  <th style={{textAlign:"left",padding:"6px",color:"#991b1b"}}>IP</th>
+                  <th style={{textAlign:"right",padding:"6px",color:"#991b1b"}}>Totaal</th>
+                  <th style={{textAlign:"right",padding:"6px",color:"#991b1b"}}>Geblocked</th>
+                  <th style={{textAlign:"right",padding:"6px",color:"#991b1b"}}>Fouten</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stats.suspiciousIPs.map(ip => (
+                  <tr key={ip.ip} style={{borderBottom:"1px solid #fee2e2"}}>
+                    <td style={{padding:"6px",fontFamily:"monospace"}}>{ip.ip}</td>
+                    <td style={{padding:"6px",textAlign:"right",fontWeight:700}}>{ip.total}</td>
+                    <td style={{padding:"6px",textAlign:"right",color:"#dc2626"}}>{ip.blocked}</td>
+                    <td style={{padding:"6px",textAlign:"right",color:"#ea580c"}}>{ip.failed}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+      
+      {stats.errors.length > 0 && (
+        <>
+          <div style={{fontSize:13,fontWeight:700,color:"#475569",marginBottom:10}}>⚠ Laatste fouten</div>
+          <div style={cardStyle}>
+            {stats.errors.map((err, i) => (
+              <div key={i} style={{padding:"8px 0",borderBottom: i < stats.errors.length-1 ? "1px solid #f1f5f9" : "none",fontSize:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                  <span style={{fontWeight:700,color:"#dc2626"}}>{err.event_type}</span>
+                  <span style={{color:"#94a3b8",fontSize:11}}>{new Date(err.created_at).toLocaleString("nl-NL")}</span>
+                </div>
+                <div style={{color:"#64748b",fontSize:11,fontFamily:"monospace"}}>{err.ip_address}</div>
+                <div style={{color:"#475569",marginTop:3}}>{err.error_message}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
     function App() {
       const [db,setDb]           = useState(null);
       const [dbStatus,setDbSt]   = useState("idle");
