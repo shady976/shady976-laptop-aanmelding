@@ -8,6 +8,7 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     body{background:#f0f4ff;font-family:'Segoe UI',system-ui,sans-serif}
@@ -96,6 +97,7 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
     // ── Edge Functions URLs ───────────────────────────────────────────
     const FUNCTIONS_URL = "https://hnjvsmteghbbfqnnnrah.supabase.co/functions/v1";
     const ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhuanZzbXRlZ2hiYmZxbm5ucmFoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYwODU3NDYsImV4cCI6MjA5MTY2MTc0Nn0.28FffEIJTMGvdk-qIpo6Qiu4B80pm3JL-RTCbPwxdnc";
+    const TURNSTILE_SITE_KEY = "0x4AAAAAADE_3DTEfsFv2yjJ";
 
     async function lookupPersonSupabase(voornaam, achternaam, dag, maand, jaar) {
   try {
@@ -485,18 +487,24 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
     // Verbinding loopt via Edge Functions — geen sleutels nodig in dit bestand
     const SUPABASE_ENABLED = true;
 
-    async function saveToSupabase(data) {
+    async function saveToSupabase(data, turnstileToken) {
   try {
     const res = await fetch(`${FUNCTIONS_URL}/save-aanmelding`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${ANON_KEY}` },
-      body: JSON.stringify(data)
+      body: JSON.stringify({ ...data, turnstileToken })
     });
     
     // معالجة Rate Limit
     if (res.status === 429) {
       const errData = await res.json();
       return { ok: false, message: errData.error || "Te veel aanmeldingen. Probeer over 10 minuten opnieuw.", rateLimit: true };
+    }
+    
+    // معالجة فشل CAPTCHA
+    if (res.status === 403) {
+      const errData = await res.json();
+      return { ok: false, message: errData.error || "CAPTCHA verificatie mislukt. Probeer opnieuw.", captchaFailed: true };
     }
     
     if (!res.ok) {
@@ -1417,18 +1425,22 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
 
              // ── Submit screen ──
              preStep==="submit" ? (
-              <SubmitScreen
-                onSubmit={async ()=>{
-                  const dev=devices.find(d=>d.id===form.apparaat);
-                  const submission={...form,apparaat:dev?dev.label:form.apparaat,timestamp:new Date().toLocaleString("nl-NL")};
-                  // Sla op in Supabase
-                  await saveToSupabase(submission);
-                  // Sla ook lokaal op in sessie
-                  setSubs(p=>[...p,submission]);
-                  setDone(true);
-                }}
-                onBack={()=>setPreStep("review")}
-              />
+  <SubmitScreen
+    onSubmit={async (turnstileToken)=>{
+      const dev=devices.find(d=>d.id===form.apparaat);
+      const submission={...form,apparaat:dev?dev.label:form.apparaat,timestamp:new Date().toLocaleString("nl-NL")};
+      // Sla op in Supabase
+      const result = await saveToSupabase(submission, turnstileToken);
+      if (!result.ok) {
+        alert(result.message);
+        return;
+      }
+      // Sla ook lokaal op in sessie
+      setSubs(p=>[...p,submission]);
+      setDone(true);
+    }}
+    onBack={()=>setPreStep("review")}
+  />
              ) : (
               <>
                 {cycleStart&&cycleEnd&&(
@@ -1539,26 +1551,71 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
 
     // ── Submit screen ─────────────────────────────────────────────────
     function SubmitScreen({onSubmit,onBack}) {
-      return (
-        <div style={{...C.center,padding:"40px 28px"}}>
-          <div style={{fontSize:48,marginBottom:16}}>📤</div>
-          <div style={{fontSize:20,fontWeight:700,color:"#1e293b",marginBottom:12}}>Aanmelding versturen</div>
-          <div style={{fontSize:15,color:"#374151",lineHeight:1.7,marginBottom:28}}>
-            Uw gegevens zijn gecontroleerd en klaar om te worden verstuurd.<br/>
-            Druk op de knop hieronder om uw aanmelding in te dienen.
-          </div>
-          <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
-            <button style={C.backBtn} onClick={onBack}>← Terug</button>
-            <button onClick={onSubmit} style={{
-              padding:"14px 32px",borderRadius:12,border:"none",
-              background:"linear-gradient(135deg,#16a34a,#22c55e)",
-              color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",
-              boxShadow:"0 4px 16px rgba(22,163,74,0.3)",
-            }}>🚀 Aanmelding indienen</button>
-          </div>
-        </div>
-      );
+  const [token, setToken] = useState("");
+  const [verifying, setVerifying] = useState(false);
+  const widgetRef = useRef(null);
+  const widgetIdRef = useRef(null);
+  
+  React.useEffect(() => {
+    // انتظر تحميل Turnstile API
+    const checkTurnstile = setInterval(() => {
+      if (window.turnstile && widgetRef.current && !widgetIdRef.current) {
+        clearInterval(checkTurnstile);
+        widgetIdRef.current = window.turnstile.render(widgetRef.current, {
+          sitekey: TURNSTILE_SITE_KEY,
+          callback: (t) => { setToken(t); setVerifying(false); },
+          "error-callback": () => { setToken(""); setVerifying(false); },
+          "expired-callback": () => { setToken(""); },
+          "before-interactive-callback": () => { setVerifying(true); },
+        });
+      }
+    }, 100);
+    
+    return () => {
+      clearInterval(checkTurnstile);
+      if (widgetIdRef.current && window.turnstile) {
+        try { window.turnstile.remove(widgetIdRef.current); } catch(e){}
+      }
+    };
+  }, []);
+  
+  const handleSubmit = () => {
+    if (!token) {
+      alert("Voltooi eerst de beveiligingscontrole.");
+      return;
     }
+    onSubmit(token);
+  };
+  
+  return (
+    <div style={{...C.center,padding:"40px 28px"}}>
+      <div style={{fontSize:48,marginBottom:16}}>📤</div>
+      <div style={{fontSize:20,fontWeight:700,color:"#1e293b",marginBottom:12}}>Aanmelding versturen</div>
+      <div style={{fontSize:15,color:"#374151",lineHeight:1.7,marginBottom:24}}>
+        Uw gegevens zijn gecontroleerd en klaar om te worden verstuurd.<br/>
+        Voltooi de beveiligingscontrole hieronder en druk op verzenden.
+      </div>
+      
+      {/* Turnstile widget */}
+      <div style={{display:"flex",justifyContent:"center",marginBottom:24}}>
+        <div ref={widgetRef}></div>
+      </div>
+      
+      <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
+        <button style={C.backBtn} onClick={onBack}>← Terug</button>
+        <button onClick={handleSubmit} disabled={!token || verifying} style={{
+          padding:"14px 32px",borderRadius:12,border:"none",
+          background: token ? "linear-gradient(135deg,#16a34a,#22c55e)" : "#94a3b8",
+          color:"#fff",fontSize:16,fontWeight:700,cursor: token ? "pointer" : "default",
+          boxShadow: token ? "0 4px 16px rgba(22,163,74,0.3)" : "none",
+          opacity: verifying ? 0.7 : 1,
+        }}>
+          {verifying ? "⏳ Verifiëren..." : token ? "🚀 Aanmelding indienen" : "🔒 Voltooi eerst de controle"}
+        </button>
+      </div>
+    </div>
+  );
+}
 
     const C={
       page:{minHeight:"100vh",background:"linear-gradient(135deg,#f0f4ff,#e8f0fe 50%,#f0f0ff)",display:"flex",flexDirection:"column",alignItems:"center",padding:"0 16px 48px",fontFamily:"'Segoe UI',system-ui,sans-serif"},
