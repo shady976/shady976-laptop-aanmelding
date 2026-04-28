@@ -98,21 +98,29 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
     const ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhuanZzbXRlZ2hiYmZxbm5ucmFoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYwODU3NDYsImV4cCI6MjA5MTY2MTc0Nn0.28FffEIJTMGvdk-qIpo6Qiu4B80pm3JL-RTCbPwxdnc";
 
     async function lookupPersonSupabase(voornaam, achternaam, dag, maand, jaar) {
-      try {
-        const res = await fetch(`${FUNCTIONS_URL}/check-person`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${ANON_KEY}` },
-          body: JSON.stringify({ voornaam, achternaam, dag, maand, jaar })
-        });
-        if (!res.ok) return null;
-        const { matches } = await res.json();
-        if (!matches || matches.length === 0) return { status:"none" };
-        return lookupPerson(matches, voornaam, achternaam, dag, maand, jaar);
-      } catch(e) {
-        console.error("check-person fout:", e);
-        return null;
-      }
+  try {
+    const res = await fetch(`${FUNCTIONS_URL}/check-person`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${ANON_KEY}` },
+      body: JSON.stringify({ voornaam, achternaam, dag, maand, jaar })
+    });
+    
+    // معالجة Rate Limit
+    if (res.status === 429) {
+      const data = await res.json();
+      alert(data.error || "Te veel verzoeken. Probeer later opnieuw.");
+      return null;
     }
+    
+    if (!res.ok) return null;
+    const { matches } = await res.json();
+    if (!matches || matches.length === 0) return { status:"none" };
+    return lookupPerson(matches, voornaam, achternaam, dag, maand, jaar);
+  } catch(e) {
+    console.error("check-person fout:", e);
+    return null;
+  }
+}
 
     function lookupPerson(rows, voornaam, achternaam, dag, maand, jaar) {
       const n = (s) => String(s||"").trim().toLowerCase().replace(/\s+/g," ");
@@ -478,21 +486,28 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
     const SUPABASE_ENABLED = true;
 
     async function saveToSupabase(data) {
-      try {
-        const res = await fetch(`${FUNCTIONS_URL}/save-aanmelding`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${ANON_KEY}` },
-          body: JSON.stringify(data)
-        });
-        if (!res.ok) {
-          const err = await res.text();
-          return { ok: false, message: "Fout bij opslaan: " + err };
-        }
-        return { ok: true, message: "Opgeslagen in database" };
-      } catch(e) {
-        return { ok: false, message: "Verbinding mislukt: " + e.message };
-      }
+  try {
+    const res = await fetch(`${FUNCTIONS_URL}/save-aanmelding`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${ANON_KEY}` },
+      body: JSON.stringify(data)
+    });
+    
+    // معالجة Rate Limit
+    if (res.status === 429) {
+      const errData = await res.json();
+      return { ok: false, message: errData.error || "Te veel aanmeldingen. Probeer over 10 minuten opnieuw.", rateLimit: true };
     }
+    
+    if (!res.ok) {
+      const err = await res.text();
+      return { ok: false, message: "Fout bij opslaan: " + err };
+    }
+    return { ok: true, message: "Opgeslagen in database" };
+  } catch(e) {
+    return { ok: false, message: "Verbinding mislukt: " + e.message };
+  }
+}
 
     // ── Intersolve Stadspas API ───────────────────────────────────────
     // ↓ Vervang deze waarden wanneer u de API-gegevens ontvangt van Intersolve
