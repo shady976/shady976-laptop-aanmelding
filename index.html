@@ -659,7 +659,7 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
         </div>
       );
     }
-
+    
     function SuccessView({form,devices,thankYou,onReset}) {
       const dev=devices.find(d=>d.id===form.apparaat);
       const msg=thankYou.replace(/\{voornaam\}/g,form.voornaam);
