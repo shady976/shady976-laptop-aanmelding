@@ -9,6 +9,7 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
   <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     body{background:#f0f4ff;font-family:'Segoe UI',system-ui,sans-serif}
@@ -95,9 +96,19 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
 
     // ── Supabase lookup: zoek persoon in database_oud ─────────────────
     // ── Edge Functions URLs ───────────────────────────────────────────
-    const FUNCTIONS_URL = "https://hnjvsmteghbbfqnnnrah.supabase.co/functions/v1";
+    const SUPABASE_URL = "https://hnjvsmteghbbfqnnnrah.supabase.co";
+    const FUNCTIONS_URL = SUPABASE_URL + "/functions/v1";
     const ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhuanZzbXRlZ2hiYmZxbm5ucmFoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYwODU3NDYsImV4cCI6MjA5MTY2MTc0Nn0.28FffEIJTMGvdk-qIpo6Qiu4B80pm3JL-RTCbPwxdnc";
     const TURNSTILE_SITE_KEY = "0x4AAAAAADE_3DTEfsFv2yjJ";
+
+    // ── Supabase Auth client ─────────────────────────────────────────
+    const supabaseClient = window.supabase.createClient(SUPABASE_URL, ANON_KEY, {
+      auth: {
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: false,
+      }
+    });
 
     async function lookupPersonSupabase(voornaam, achternaam, dag, maand, jaar) {
   try {
@@ -929,51 +940,60 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
 
     function StatsTab() {
   const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [adminPwd, setAdminPwd] = useState("");
-  const [authenticated, setAuthenticated] = useState(false);
   
-  const loadStats = async (pwd) => {
+  const loadStats = async () => {
     setLoading(true); setError("");
     try {
+      // Haal de huidige sessie op (JWT token)
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      if (!session) {
+        setError("Geen actieve sessie. Log opnieuw in.");
+        setLoading(false);
+        return;
+      }
+      
       const res = await fetch(`${FUNCTIONS_URL}/admin-stats`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${ANON_KEY}` },
-        body: JSON.stringify({ adminPassword: pwd })
+        headers: { 
+          "Content-Type": "application/json", 
+          "Authorization": `Bearer ${session.access_token}` 
+        },
       });
       if (res.status === 401) {
-        setError("Ongeldig wachtwoord");
+        setError("Sessie verlopen. Log opnieuw in.");
+        setLoading(false);
+        return;
+      }
+      if (res.status === 403) {
+        setError("Geen admin rechten voor dit account.");
         setLoading(false);
         return;
       }
       if (!res.ok) throw new Error("Fout bij laden");
       const data = await res.json();
       setStats(data);
-      setAuthenticated(true);
     } catch (e) {
       setError("Verbindingsfout: " + e.message);
     }
     setLoading(false);
   };
   
-  if (!authenticated) {
+  React.useEffect(() => { loadStats(); }, []);
+  
+  if (loading && !stats) return <div style={{padding:24,textAlign:"center",color:"#64748b"}}>⏳ Statistieken laden...</div>;
+  
+  if (error) {
     return (
       <div style={{padding:"24px"}}>
-        <div style={{fontSize:14,fontWeight:700,color:"#1e293b",marginBottom:12}}>🔐 Statistieken vereisen extra verificatie</div>
-        <div style={{fontSize:13,color:"#64748b",marginBottom:16}}>Voer het admin wachtwoord in om statistieken te bekijken.</div>
-        <div style={{display:"flex",gap:8}}>
-          <input type="password" value={adminPwd}
-            onChange={e=>setAdminPwd(e.target.value)}
-            onKeyDown={e=>e.key==="Enter"&&adminPwd&&loadStats(adminPwd)}
-            placeholder="Wachtwoord"
-            style={{flex:1,padding:"10px 13px",borderRadius:9,border:"1.5px solid #cbd5e1",fontSize:14,background:"#f8fafc"}}/>
-          <button onClick={()=>adminPwd&&loadStats(adminPwd)} disabled={loading||!adminPwd}
-            style={{padding:"10px 20px",borderRadius:9,border:"none",background:loading||!adminPwd?"#94a3b8":"#1d4ed8",color:"#fff",fontWeight:700,fontSize:14,cursor:loading||!adminPwd?"default":"pointer"}}>
-            {loading?"⏳":"🔓 Bekijk"}
-          </button>
+        <div style={{background:"#fef2f2",border:"1px solid #fecaca",borderRadius:10,padding:"16px",fontSize:14,color:"#dc2626",marginBottom:12}}>
+          ⚠ {error}
         </div>
-        {error&&<div style={{fontSize:12,color:"#ef4444",marginTop:8}}>⚠ {error}</div>}
+        <button onClick={loadStats}
+          style={{padding:"10px 20px",borderRadius:9,border:"none",background:"#1d4ed8",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer"}}>
+          🔄 Opnieuw proberen
+        </button>
       </div>
     );
   }
@@ -1006,7 +1026,7 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
           <div style={{fontSize:16,fontWeight:700,color:"#1e293b"}}>📊 Statistieken Dashboard</div>
           <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>Bijgewerkt: {new Date(stats.generatedAt).toLocaleString("nl-NL")}</div>
         </div>
-        <button onClick={()=>loadStats(adminPwd)} disabled={loading} style={{padding:"6px 14px",borderRadius:8,border:"1px solid #cbd5e1",background:"#fff",fontSize:12,fontWeight:600,cursor:"pointer"}}>
+        <button onClick={loadStats} disabled={loading} style={{padding:"6px 14px",borderRadius:8,border:"1px solid #cbd5e1",background:"#fff",fontSize:12,fontWeight:600,cursor:"pointer"}}>
           🔄 Vernieuwen
         </button>
       </div>
@@ -1334,75 +1354,182 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
         </div>
       );
 
-      // ── TOTP 2FA Implementation ─────────────────────────────────────
-      const TOTP_SECRET    = "JBSWY3DPEHPK3PXP"; // ← غيّر هذا المفتاح
-      const ADMIN_PASSWORD = "Cyberbank2025";      // ← غيّر كلمة المرور
-
-      const base32Decode = (s) => {
-        const CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-        s = s.toUpperCase().replace(/=+$/,"");
-        let bits=0, val=0;
-        const out=[];
-        for(const c of s){ val=(val<<5)|CHARS.indexOf(c); bits+=5; if(bits>=8){out.push((val>>>(bits-8))&255);bits-=8;} }
-        return new Uint8Array(out);
-      };
-
-      const getTOTP = async (secret, offset=0) => {
-        const key = base32Decode(secret);
-        const t   = Math.floor(Date.now()/1000/30) + offset;
-        const tb  = new DataView(new ArrayBuffer(8));
-        tb.setUint32(4, t, false);
-        const ck  = await crypto.subtle.importKey("raw",key,{name:"HMAC",hash:"SHA-1"},false,["sign"]);
-        const sig = new Uint8Array(await crypto.subtle.sign("HMAC",ck,tb.buffer));
-        const off = sig[19]&0xf;
-        const code = ((sig[off]&0x7f)<<24|(sig[off+1]&0xff)<<16|(sig[off+2]&0xff)<<8|(sig[off+3]&0xff))%1000000;
-        return String(code).padStart(6,"0");
-      };
-
+      // ── Supabase Auth Implementation (with MFA) ─────────────────────
       const [adminAuth,  setAdminAuth]  = useState(false);
+      const [adminEmail, setAdminEmail] = useState("");
       const [showPwBox,  setShowPwBox]  = useState(false);
-      const [loginStep,  setLoginStep]  = useState(1);
+      const [loginStep,  setLoginStep]  = useState(1); // 1=email/pwd, 2=mfa, 3=mfa-enroll
+      const [emailInput, setEmailInput] = useState("");
       const [pwInput,    setPwInput]    = useState("");
       const [totpInput,  setTotpInput]  = useState("");
       const [loginError, setLoginError] = useState("");
-      const [totpTimer,  setTotpTimer]  = useState(30);
+      const [authLoading, setAuthLoading] = useState(false);
+      const [mfaFactorId, setMfaFactorId] = useState(null);
+      const [mfaChallengeId, setMfaChallengeId] = useState(null);
+      const [enrollQR, setEnrollQR] = useState(null);
+      const [enrollSecret, setEnrollSecret] = useState(null);
 
+      // Check existing session on mount
       React.useEffect(() => {
-        if(!showPwBox || loginStep!==2) return;
-        const tick = () => setTotpTimer(30-(Math.floor(Date.now()/1000)%30));
-        tick();
-        const iv = setInterval(tick,1000);
-        return ()=>clearInterval(iv);
-      }, [showPwBox, loginStep]);
+        (async () => {
+          const { data: { session } } = await supabaseClient.auth.getSession();
+          if (session) {
+            // Check if MFA is verified for this session
+            const { data: mfaData } = await supabaseClient.auth.mfa.getAuthenticatorAssuranceLevel();
+            if (mfaData?.currentLevel === "aal2" || !mfaData?.nextLevel || mfaData?.nextLevel === "aal1") {
+              // Either MFA is verified, or no MFA enrolled yet
+              setAdminAuth(true);
+              setAdminEmail(session.user.email || "");
+              setShowAdmin(true);
+            }
+          }
+        })();
+      }, []);
 
-      const handleStep1 = () => {
-        if(pwInput.trim() === ADMIN_PASSWORD){
-          setLoginStep(2); setPwInput(""); setLoginError("");
-        } else {
-          setLoginError("Onjuist wachtwoord"); setPwInput("");
+      const handleStep1 = async () => {
+        if (!emailInput.trim() || !pwInput.trim()) {
+          setLoginError("Vul email en wachtwoord in");
+          return;
         }
+        setAuthLoading(true); setLoginError("");
+        try {
+          const { data, error } = await supabaseClient.auth.signInWithPassword({
+            email: emailInput.trim(),
+            password: pwInput,
+          });
+          if (error) {
+            setLoginError(error.message === "Invalid login credentials" 
+              ? "Onjuist email of wachtwoord" 
+              : "Inlogfout: " + error.message);
+            setAuthLoading(false);
+            return;
+          }
+
+          // Check if user has MFA enrolled
+          const { data: factors } = await supabaseClient.auth.mfa.listFactors();
+          const totpFactor = factors?.totp?.find(f => f.status === "verified");
+
+          if (totpFactor) {
+            // MFA enrolled — challenge user
+            const { data: challenge, error: chErr } = await supabaseClient.auth.mfa.challenge({
+              factorId: totpFactor.id
+            });
+            if (chErr) {
+              setLoginError("MFA fout: " + chErr.message);
+              setAuthLoading(false);
+              return;
+            }
+            setMfaFactorId(totpFactor.id);
+            setMfaChallengeId(challenge.id);
+            setLoginStep(2);
+            setPwInput("");
+            setLoginError("");
+          } else {
+            // No MFA yet — enroll now (mandatory for first login)
+            const { data: enroll, error: enErr } = await supabaseClient.auth.mfa.enroll({
+              factorType: "totp",
+              friendlyName: "Cyberbank Admin"
+            });
+            if (enErr) {
+              setLoginError("MFA setup fout: " + enErr.message);
+              setAuthLoading(false);
+              return;
+            }
+            setMfaFactorId(enroll.id);
+            setEnrollQR(enroll.totp.qr_code);
+            setEnrollSecret(enroll.totp.secret);
+            setLoginStep(3);
+            setPwInput("");
+            setLoginError("");
+          }
+        } catch(e) {
+          setLoginError("Verbindingsfout: " + e.message);
+        }
+        setAuthLoading(false);
       };
 
       const handleStep2 = async () => {
-        const c0 = await getTOTP(TOTP_SECRET,  0);
-        const c1 = await getTOTP(TOTP_SECRET, -1);
-        if(totpInput===c0 || totpInput===c1){
-          setAdminAuth(true); setShowPwBox(false); setShowAdmin(true);
-          setTotpInput(""); setLoginError(""); setLoginStep(1);
-        } else {
-          setLoginError("Onjuiste code — probeer opnieuw"); setTotpInput("");
+        if (totpInput.length !== 6) return;
+        setAuthLoading(true); setLoginError("");
+        try {
+          const { data, error } = await supabaseClient.auth.mfa.verify({
+            factorId: mfaFactorId,
+            challengeId: mfaChallengeId,
+            code: totpInput,
+          });
+          if (error) {
+            setLoginError("Onjuiste code — probeer opnieuw");
+            setTotpInput("");
+            setAuthLoading(false);
+            return;
+          }
+          // Successfully verified MFA
+          const { data: { session } } = await supabaseClient.auth.getSession();
+          setAdminAuth(true);
+          setAdminEmail(session?.user?.email || "");
+          setShowPwBox(false);
+          setShowAdmin(true);
+          setEmailInput(""); setPwInput(""); setTotpInput("");
+          setLoginError(""); setLoginStep(1);
+          setMfaFactorId(null); setMfaChallengeId(null);
+        } catch(e) {
+          setLoginError("Verificatie fout: " + e.message);
         }
+        setAuthLoading(false);
       };
 
-      const handleAdminLogout = () => {
-        setAdminAuth(false); setShowAdmin(false);
-        setLoginStep(1); setPwInput(""); setTotpInput(""); setLoginError("");
-        setShowPwBox(false);
+      const handleEnrollVerify = async () => {
+        if (totpInput.length !== 6) return;
+        setAuthLoading(true); setLoginError("");
+        try {
+          // Challenge first
+          const { data: challenge, error: chErr } = await supabaseClient.auth.mfa.challenge({
+            factorId: mfaFactorId
+          });
+          if (chErr) throw chErr;
+          // Verify the code
+          const { data, error } = await supabaseClient.auth.mfa.verify({
+            factorId: mfaFactorId,
+            challengeId: challenge.id,
+            code: totpInput,
+          });
+          if (error) {
+            setLoginError("Onjuiste code — controleer uw Authenticator app");
+            setTotpInput("");
+            setAuthLoading(false);
+            return;
+          }
+          // Enrolled and verified successfully
+          const { data: { session } } = await supabaseClient.auth.getSession();
+          setAdminAuth(true);
+          setAdminEmail(session?.user?.email || "");
+          setShowPwBox(false);
+          setShowAdmin(true);
+          setEmailInput(""); setPwInput(""); setTotpInput("");
+          setLoginError(""); setLoginStep(1);
+          setMfaFactorId(null); setEnrollQR(null); setEnrollSecret(null);
+        } catch(e) {
+          setLoginError("Setup fout: " + e.message);
+        }
+        setAuthLoading(false);
+      };
+
+      const handleAdminLogout = async () => {
+        await supabaseClient.auth.signOut();
+        setAdminAuth(false); setAdminEmail(""); setShowAdmin(false);
+        setLoginStep(1); setEmailInput(""); setPwInput(""); setTotpInput("");
+        setLoginError(""); setShowPwBox(false);
+        setMfaFactorId(null); setMfaChallengeId(null);
+        setEnrollQR(null); setEnrollSecret(null);
       };
 
       const openLogin = () => {
         setShowPwBox(prev => {
-          if(!prev){ setLoginStep(1); setPwInput(""); setTotpInput(""); setLoginError(""); }
+          if(!prev){ 
+            setLoginStep(1); setEmailInput(""); setPwInput(""); setTotpInput(""); 
+            setLoginError(""); setMfaFactorId(null); setMfaChallengeId(null);
+            setEnrollQR(null); setEnrollSecret(null);
+          }
           return !prev;
         });
       };
@@ -1418,6 +1545,7 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
                   ? <span style={C.dbOk}>✅ Supabase verbonden</span>
                   : <span style={C.dbWarn}>⚠ Supabase niet actief</span>
                 }
+                {adminEmail && <span style={{color:"#cbd5e1",fontSize:11,marginLeft:8}}>👤 {adminEmail}</span>}
               </div>
 
               <button style={{...C.adminBtn,background:showAdmin?"#7c3aed":"#4f46e5"}} onClick={()=>setShowAdmin(p=>!p)}>
@@ -1437,17 +1565,25 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
                 {loginStep===1 && (
                   <>
                     <div style={{fontSize:14,fontWeight:700,color:"#1e293b",marginBottom:4}}>🔐 Beheerderstoegang</div>
-                    <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>Stap 1 van 2 — Wachtwoord</div>
-                    <div style={{display:"flex",gap:8}}>
-                      <input type="password" value={pwInput}
-                        onChange={e=>{setPwInput(e.target.value);setLoginError("");}}
-                        onKeyDown={e=>e.key==="Enter"&&handleStep1()}
-                        placeholder="Wachtwoord invoeren" autoFocus
-                        style={{...C.input,flex:1,borderColor:loginError?"#ef4444":"#cbd5e1"}}/>
-                      <button onClick={handleStep1} style={{
-                        padding:"10px 16px",borderRadius:9,border:"none",
-                        background:"#1d4ed8",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer",
-                      }}>→</button>
+                    <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>Stap 1 van 2 — Email en wachtwoord</div>
+                    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                      <input type="email" value={emailInput}
+                        onChange={e=>{setEmailInput(e.target.value);setLoginError("");}}
+                        onKeyDown={e=>e.key==="Enter"&&pwInput&&handleStep1()}
+                        placeholder="Email" autoFocus
+                        style={{...C.input,borderColor:loginError?"#ef4444":"#cbd5e1"}}/>
+                      <div style={{display:"flex",gap:8}}>
+                        <input type="password" value={pwInput}
+                          onChange={e=>{setPwInput(e.target.value);setLoginError("");}}
+                          onKeyDown={e=>e.key==="Enter"&&emailInput&&handleStep1()}
+                          placeholder="Wachtwoord"
+                          style={{...C.input,flex:1,borderColor:loginError?"#ef4444":"#cbd5e1"}}/>
+                        <button onClick={handleStep1} disabled={authLoading||!emailInput||!pwInput} style={{
+                          padding:"10px 16px",borderRadius:9,border:"none",
+                          background:authLoading||!emailInput||!pwInput?"#94a3b8":"#1d4ed8",
+                          color:"#fff",fontWeight:700,fontSize:14,cursor:authLoading||!emailInput||!pwInput?"default":"pointer",
+                        }}>{authLoading?"⏳":"→"}</button>
+                      </div>
                     </div>
                     {loginError&&<div style={{fontSize:12,color:"#ef4444",marginTop:6}}>⚠ {loginError}</div>}
                   </>
@@ -1463,18 +1599,52 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
                         placeholder="000000" maxLength={6} autoFocus
                         style={{...C.input,flex:1,textAlign:"center",fontSize:20,letterSpacing:6,
                           borderColor:loginError?"#ef4444":"#cbd5e1"}}/>
-                      <button onClick={handleStep2} disabled={totpInput.length!==6} style={{
+                      <button onClick={handleStep2} disabled={totpInput.length!==6||authLoading} style={{
                         padding:"10px 16px",borderRadius:9,border:"none",
-                        background:totpInput.length===6?"#1d4ed8":"#94a3b8",
-                        color:"#fff",fontWeight:700,fontSize:14,cursor:totpInput.length===6?"pointer":"default",
-                      }}>✓</button>
+                        background:totpInput.length===6&&!authLoading?"#1d4ed8":"#94a3b8",
+                        color:"#fff",fontWeight:700,fontSize:14,cursor:totpInput.length===6&&!authLoading?"pointer":"default",
+                      }}>{authLoading?"⏳":"✓"}</button>
                     </div>
                     {loginError&&<div style={{fontSize:12,color:"#ef4444",marginTop:6}}>⚠ {loginError}</div>}
-                    <div style={{display:"flex",justifyContent:"space-between",marginTop:10}}>
-                      <button onClick={()=>{setLoginStep(1);setLoginError("");}} style={{
+                    <div style={{marginTop:10}}>
+                      <button onClick={()=>{setLoginStep(1);setLoginError("");setTotpInput("");}} style={{
                         background:"none",border:"none",color:"#64748b",fontSize:12,cursor:"pointer",
                       }}>← Terug</button>
-                      <span style={{fontSize:12,color:totpTimer<10?"#ef4444":"#94a3b8"}}>⏱ {totpTimer}s</span>
+                    </div>
+                  </>
+                )}
+                {loginStep===3 && (
+                  <>
+                    <div style={{fontSize:14,fontWeight:700,color:"#1e293b",marginBottom:4}}>🔒 Stel 2FA in (eenmalig)</div>
+                    <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>Scan de QR-code met uw Authenticator app (Google/Microsoft Authenticator), voer dan de 6-cijferige code in.</div>
+                    {enrollQR && (
+                      <div style={{textAlign:"center",marginBottom:12,padding:"12px",background:"#f8fafc",borderRadius:9,border:"1px solid #e2e8f0"}}>
+                        <div dangerouslySetInnerHTML={{__html: enrollQR}} style={{display:"inline-block"}}/>
+                        {enrollSecret && (
+                          <div style={{fontSize:11,color:"#64748b",marginTop:8,fontFamily:"monospace",wordBreak:"break-all"}}>
+                            Secret: {enrollSecret}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <div style={{display:"flex",gap:8}}>
+                      <input type="text" value={totpInput}
+                        onChange={e=>{setTotpInput(e.target.value.replace(/\D/g,"").slice(0,6));setLoginError("");}}
+                        onKeyDown={e=>e.key==="Enter"&&totpInput.length===6&&handleEnrollVerify()}
+                        placeholder="000000" maxLength={6} autoFocus
+                        style={{...C.input,flex:1,textAlign:"center",fontSize:20,letterSpacing:6,
+                          borderColor:loginError?"#ef4444":"#cbd5e1"}}/>
+                      <button onClick={handleEnrollVerify} disabled={totpInput.length!==6||authLoading} style={{
+                        padding:"10px 16px",borderRadius:9,border:"none",
+                        background:totpInput.length===6&&!authLoading?"#16a34a":"#94a3b8",
+                        color:"#fff",fontWeight:700,fontSize:14,cursor:totpInput.length===6&&!authLoading?"pointer":"default",
+                      }}>{authLoading?"⏳":"Bevestig"}</button>
+                    </div>
+                    {loginError&&<div style={{fontSize:12,color:"#ef4444",marginTop:6}}>⚠ {loginError}</div>}
+                    <div style={{marginTop:10}}>
+                      <button onClick={handleAdminLogout} style={{
+                        background:"none",border:"none",color:"#64748b",fontSize:12,cursor:"pointer",
+                      }}>← Annuleren</button>
                     </div>
                   </>
                 )}
