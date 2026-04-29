@@ -1161,6 +1161,100 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
       const [allowMultiAddr,setAllowMultiAddr] = useState(false);
       const [exemptAddrs,setExemptAddrs]       = useState([]);
       const [showAdmin,setShowAdmin]   = useState(false);
+      const [settingsLoaded, setSettingsLoaded] = useState(false);
+      const [settingsSaving, setSettingsSaving] = useState(false);
+      const saveTimerRef = useRef(null);
+
+      // ── تحميل الإعدادات من Supabase عند فتح الموقع ────────────────
+      React.useEffect(() => {
+        (async () => {
+          try {
+            const res = await fetch(`${FUNCTIONS_URL}/app-settings`, {
+              method: "GET",
+              headers: { "Content-Type": "application/json", "Authorization": `Bearer ${ANON_KEY}` },
+            });
+            if (!res.ok) return;
+            const { settings } = await res.json();
+            if (!settings) return;
+
+            // تطبيق الإعدادات المحملة
+            if (settings.cycle_open !== undefined)   setCycleOpen(settings.cycle_open === true || settings.cycle_open === "true");
+            if (settings.cycle_start !== undefined)  setCycleStart(settings.cycle_start || "");
+            if (settings.cycle_end !== undefined)    setCycleEnd(settings.cycle_end || "");
+            if (settings.devices && Array.isArray(settings.devices)) setDevices(settings.devices);
+            if (settings.thank_you)                  setThankYou(settings.thank_you);
+            if (settings.consent_text)               setConsentText(settings.consent_text);
+            if (settings.criteria && Array.isArray(settings.criteria)) setCriteria(settings.criteria);
+            if (settings.allow_multi_addr !== undefined) setAllowMultiAddr(settings.allow_multi_addr === true || settings.allow_multi_addr === "true");
+            if (settings.exempt_addrs && Array.isArray(settings.exempt_addrs)) setExemptAddrs(settings.exempt_addrs);
+            if (settings.extra_pages1 && Array.isArray(settings.extra_pages1)) setExtraPages1(settings.extra_pages1);
+            if (settings.extra_pages2 && Array.isArray(settings.extra_pages2)) setExtraPages2(settings.extra_pages2);
+
+            setSettingsLoaded(true);
+          } catch(e) {
+            console.warn("Instellingen laden mislukt:", e);
+            setSettingsLoaded(true); // ga toch door met defaults
+          }
+        })();
+      }, []);
+
+      // ── حفظ الإعدادات في Supabase (للأدمن فقط — مع debounce) ──────
+      const saveSettings = React.useCallback(async (newSettings) => {
+        const { data: { session } } = await supabaseClient.auth.getSession();
+        if (!session) return; // فقط إذا كان الأدمن مسجّل دخول
+
+        setSettingsSaving(true);
+        try {
+          await fetch(`${FUNCTIONS_URL}/app-settings`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({ settings: newSettings }),
+          });
+        } catch(e) {
+          console.warn("Opslaan mislukt:", e);
+        }
+        setSettingsSaving(false);
+      }, []);
+
+      // دالة مساعدة: حفظ مع debounce (ننتظر 1.5 ثانية بعد آخر تغيير)
+      const debouncedSave = React.useCallback((settings) => {
+        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = setTimeout(() => saveSettings(settings), 1500);
+      }, [saveSettings]);
+
+      // Wrappers للـ setters تحفظ تلقائياً عند التغيير (للأدمن فقط)
+      const setCycleOpenAndSave = (v) => { setCycleOpen(v); debouncedSave({ cycle_open: v }); };
+      const setCycleStartAndSave = (v) => { setCycleStart(v); debouncedSave({ cycle_start: v }); };
+      const setCycleEndAndSave = (v) => { setCycleEnd(v); debouncedSave({ cycle_end: v }); };
+      const setDevicesAndSave = (v) => {
+        const newVal = typeof v === "function" ? v(devices) : v;
+        setDevices(newVal); debouncedSave({ devices: newVal });
+      };
+      const setThankYouAndSave = (v) => { setThankYou(v); debouncedSave({ thank_you: v }); };
+      const setConsentTextAndSave = (v) => { setConsentText(v); debouncedSave({ consent_text: v }); };
+      const setCriteriaAndSave = (v) => {
+        const newVal = typeof v === "function" ? v(criteria) : v;
+        setCriteria(newVal); debouncedSave({ criteria: newVal });
+      };
+      const setAllowMultiAddrAndSave = (v) => {
+        const newVal = typeof v === "function" ? v(allowMultiAddr) : v;
+        setAllowMultiAddr(newVal); debouncedSave({ allow_multi_addr: newVal });
+      };
+      const setExemptAddrsAndSave = (v) => {
+        const newVal = typeof v === "function" ? v(exemptAddrs) : v;
+        setExemptAddrs(newVal); debouncedSave({ exempt_addrs: newVal });
+      };
+      const setExtraPages1AndSave = (v) => {
+        const newVal = typeof v === "function" ? v(extraPages1) : v;
+        setExtraPages1(newVal); debouncedSave({ extra_pages1: newVal });
+      };
+      const setExtraPages2AndSave = (v) => {
+        const newVal = typeof v === "function" ? v(extraPages2) : v;
+        setExtraPages2(newVal); debouncedSave({ extra_pages2: newVal });
+      };
 
       // Pre-form flow: "consent" → "criteria" → extraPages1 → "form"
       const [preStep,setPreStep] = useState("consent");
@@ -1597,11 +1691,25 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
               <button style={{...C.adminBtn,background:showAdmin?"#7c3aed":"#4f46e5"}} onClick={()=>setShowAdmin(p=>!p)}>
                 {showAdmin?"✕ Sluiten":"⚙ Instellingen"}
               </button>
+              {settingsSaving && <span style={{color:"#fbbf24",fontSize:11}}>💾 Opslaan...</span>}
               {submissions.length>0&&<button style={{...C.adminBtn,background:"#16a34a"}} onClick={()=>exportCSV(submissions)}>📥 Export ({submissions.length})</button>}
             </div>
           )}
 
-          {adminAuth && showAdmin && <AdminPanels {...{cycleOpen,setCycleOpen,cycleStart,setCycleStart,cycleEnd,setCycleEnd,devices,setDevices,thankYou,setThankYou,submissions,allowMultiAddr,setAllowMultiAddr,exemptAddrs,setExemptAddrs,consentText,setConsentText,criteria,setCriteria,extraPages1,setExtraPages1,extraPages2,setExtraPages2}}/>}
+          {adminAuth && showAdmin && <AdminPanels {...{
+            cycleOpen, setCycleOpen: setCycleOpenAndSave,
+            cycleStart, setCycleStart: setCycleStartAndSave,
+            cycleEnd, setCycleEnd: setCycleEndAndSave,
+            devices, setDevices: setDevicesAndSave,
+            thankYou, setThankYou: setThankYouAndSave,
+            submissions,
+            allowMultiAddr, setAllowMultiAddr: setAllowMultiAddrAndSave,
+            exemptAddrs, setExemptAddrs: setExemptAddrsAndSave,
+            consentText, setConsentText: setConsentTextAndSave,
+            criteria, setCriteria: setCriteriaAndSave,
+            extraPages1, setExtraPages1: setExtraPages1AndSave,
+            extraPages2, setExtraPages2: setExtraPages2AndSave,
+          }}/>}
 
           <div style={C.card}>
             <CardHeader/>
