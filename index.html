@@ -183,7 +183,8 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
             const wb  = XLSX.read(ev.target.result, {type:"array"});
             const ws  = wb.Sheets[wb.SheetNames[0]];
             const raw = XLSX.utils.sheet_to_json(ws, {defval:""});
-            const n   = (s) => String(s||"").trim().toLowerCase();
+            // Normaliseer kolomnamen: lowercase + verwijder spaties
+            const n = (s) => String(s||"").toLowerCase().replace(/\s+/g,"").trim();
             const rows = raw.map(r => {
               const keys = Object.keys(r);
               const get  = (...names) => {
@@ -200,8 +201,11 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
                 maand:          get("Maand","maand"),
                 jaar:           get("Jaar","jaar"),
                 serienummer:    get("Serienummer","serienummer"),
-                uitdelen_datum: get("Uitdelen Datum","uitdelen datum","uitdelen_datum"),
+                uitdelen_datum: get("Uitdelen Datum","uitdelen datum","uitdelen_datum","UitdelenDatum"),
                 adres:          get("Adres","adres"),
+                postcode:       get("Postcode","postcode"),
+                stadspasnummer: get("Stadspasnummer","stadspasnummer","StadspasNummer"),
+                telefoonnummer: get("Tel","tel","Telefoonnummer","telefoonnummer","Telefoon","telefoon"),
               };
             });
             resolve({ok:true, rows: rows.filter(r => String(r.voornaam).trim())});
@@ -753,30 +757,21 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
             return;
           }
 
-          // Normaliseer kolomnamen (Tel → telefoonnummer, etc.)
-          const normalized = result.rows.map(r => {
-            const keys = Object.keys(r);
-            const get = (...names) => {
-              for (const nm of names) {
-                const k = keys.find(k => k.toLowerCase().trim() === nm.toLowerCase().trim());
-                if (k !== undefined) return r[k];
-              }
-              return "";
-            };
-            return {
-              voornaam:       String(get("Voornaam","voornaam") || "").trim(),
-              achternaam:     String(get("Achternaam","achternaam") || "").trim(),
-              dag:            String(get("Dag","dag") || "").trim(),
-              maand:          String(get("Maand","maand") || "").trim().toLowerCase(),
-              jaar:           String(get("Jaar","jaar") || "").replace(/\.0$/,"").trim(),
-              serienummer:    String(get("Serienummer","serienummer") || "").trim(),
-              uitdelen_datum: String(get("Uitdelen Datum","uitdelen_datum","uitdelen datum") || "").trim(),
-              adres:          String(get("Adres","adres") || "").trim(),
-              postcode:       String(get("Postcode","postcode") || "").trim(),
-              stadspasnummer: String(get("Stadspasnummer","stadspasnummer") || "").trim(),
-              telefoonnummer: String(get("Tel","tel","Telefoonnummer","telefoonnummer") || "").trim(),
-            };
-          }).filter(r => r.voornaam && r.achternaam);
+          // Normaliseer kolomnamen — gebruik result.rows direct (al geparsed door parseXLSXFile)
+          // parseXLSXFile leest al stadspasnummer en telefoonnummer
+          const normalized = result.rows.map(r => ({
+            voornaam:       String(r.voornaam || "").trim(),
+            achternaam:     String(r.achternaam || "").trim(),
+            dag:            String(r.dag || "").trim(),
+            maand:          String(r.maand || "").trim().toLowerCase(),
+            jaar:           String(r.jaar || "").replace(/\.0$/,"").trim(),
+            serienummer:    String(r.serienummer || "").trim(),
+            uitdelen_datum: String(r.uitdelen_datum || "").trim(),
+            adres:          String(r.adres || "").trim(),
+            postcode:       String(r.postcode || "").trim(),
+            stadspasnummer: String(r.stadspasnummer || "").trim(),
+            telefoonnummer: String(r.telefoonnummer || "").trim(),
+          })).filter(r => r.voornaam && r.achternaam);
 
           setImportRows(normalized);
           setImportStatus("preview");
