@@ -1331,20 +1331,36 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
 
       const reset=()=>{setForm(EMPTY);setStep(1);setErrors({});setBlocked(null);setDone(false);setAddrOk(false);setAddrSt("idle");setAddrMsg("");setPreStep("consent");setConsentAnswer(null);setCriteriaAnswers([null,null,null,null]);setPreError("");setExtraPageIdx(0);setShowReview(false);setReviewConfirmed(false);setStadspasStatus(null);setStadspasChecking(false);};
 
+      const [logoClickCount, setLogoClickCount] = useState(0);
+      const logoClickTimerRef = useRef(null);
+      
+      const handleLogoClick = () => {
+        // 5 quick clicks on logo opens admin login (hidden trigger)
+        const newCount = logoClickCount + 1;
+        setLogoClickCount(newCount);
+        
+        if (logoClickTimerRef.current) clearTimeout(logoClickTimerRef.current);
+        logoClickTimerRef.current = setTimeout(() => setLogoClickCount(0), 2000);
+        
+        if (newCount >= 5) {
+          setLogoClickCount(0);
+          if (!adminAuth) openLogin();
+        }
+      };
+
       const CardHeader=()=>(
         <div style={{...C.header,position:"relative"}}>
           <div style={C.logoRow}>
-            <span style={{fontSize:34}}>💻</span>
+            {/* Logo is now a hidden trigger — click 5 times to open admin login */}
+            <span 
+              onClick={handleLogoClick}
+              style={{fontSize:34,cursor:"default",userSelect:"none"}}
+              title=""
+            >💻</span>
             <div><div style={C.orgName}>Apparaat aanvraag bij Cyberbank</div></div>
           </div>
-          {/* Discreet admin trigger — hidden in header corner */}
-          {!adminAuth ? (
-            <button onClick={openLogin} style={{
-              position:"absolute",top:8,right:10,
-              background:"none",border:"none",color:"rgba(255,255,255,0.2)",
-              fontSize:14,cursor:"pointer",padding:"4px 6px",lineHeight:1,
-            }}>⚙</button>
-          ) : (
+          {/* Logout button — only visible when admin is logged in */}
+          {adminAuth && (
             <button onClick={handleAdminLogout} style={{
               position:"absolute",top:8,right:10,
               background:"rgba(255,255,255,0.15)",border:"none",color:"#fff",
@@ -1533,6 +1549,36 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
           return !prev;
         });
       };
+
+      // ── Hidden admin access triggers ─────────────────────────────────
+      // Trigger 1: Keyboard shortcut Ctrl+Shift+A
+      // Trigger 2: URL hash #cb-mgmt-2026
+      // Trigger 3: 5 quick clicks on logo (handled in handleLogoClick above)
+      React.useEffect(() => {
+        const handleKeyDown = (e) => {
+          if (e.ctrlKey && e.shiftKey && (e.key === "A" || e.key === "a")) {
+            e.preventDefault();
+            if (!adminAuth && !showPwBox) openLogin();
+          }
+        };
+        
+        const checkUrlHash = () => {
+          if (window.location.hash === "#cb-mgmt-2026" && !adminAuth && !showPwBox) {
+            openLogin();
+            // Clear hash from URL for cleanliness
+            history.replaceState(null, "", window.location.pathname);
+          }
+        };
+        
+        window.addEventListener("keydown", handleKeyDown);
+        window.addEventListener("hashchange", checkUrlHash);
+        checkUrlHash(); // Check on load
+        
+        return () => {
+          window.removeEventListener("keydown", handleKeyDown);
+          window.removeEventListener("hashchange", checkUrlHash);
+        };
+      }, [adminAuth, showPwBox]);
 
       return (
         <div style={C.page}>
