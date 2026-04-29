@@ -1360,7 +1360,7 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
             }
             const csDate=cycleStart?new Date(cycleStart):null;
             const ceDate=cycleEnd?new Date(cycleEnd):null;
-            if(csDate&&ceDate){
+            if(csDate&&ceDate&&db){
               const n=(s)=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");
               const dup=db.rows.some(r=>{
                 if(n(r.voornaam)!==n(form.voornaam)||n(r.achternaam)!==n(form.achternaam)) return false;
