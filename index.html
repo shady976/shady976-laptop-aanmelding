@@ -699,6 +699,304 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
       );
     }
 
+    // ── Import Tab Component ──────────────────────────────────────────
+    function ImportTab() {
+      const [importFile, setImportFile] = useState(null);
+      const [importRows, setImportRows] = useState(null);
+      const [importStatus, setImportStatus] = useState("idle"); // idle|parsing|preview|importing|done|error
+      const [importResult, setImportResult] = useState(null);
+      const [importError, setImportError] = useState("");
+      const [dbCount, setDbCount] = useState(null);
+      const importFileRef = React.useRef();
+
+      // Laad huidige telling bij openen
+      React.useEffect(() => {
+        (async () => {
+          try {
+            const { data: { session } } = await supabaseClient.auth.getSession();
+            if (!session) return;
+            const res = await fetch(`${FUNCTIONS_URL}/import-winnaars`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "Authorization": `Bearer ${session.access_token}` },
+              body: JSON.stringify({ rows: [], preview: true }),
+            });
+            // We just want a count from database
+            const r = await fetch(`${FUNCTIONS_URL}/admin-stats`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "Authorization": `Bearer ${session.access_token}` },
+            });
+            // Use SQL check via audit log count as proxy
+          } catch(e) {}
+        })();
+      }, []);
+
+      const handleFileSelect = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        setImportFile(file);
+        setImportStatus("parsing");
+        setImportError("");
+        setImportRows(null);
+        setImportResult(null);
+
+        try {
+          const result = await parseXLSXFile(file);
+          if (!result.ok) {
+            setImportError("Bestand kon niet worden gelezen: " + (result.error || "onbekende fout"));
+            setImportStatus("error");
+            return;
+          }
+
+          if (result.rows.length === 0) {
+            setImportError("Geen geldige rijen gevonden in het bestand.");
+            setImportStatus("error");
+            return;
+          }
+
+          // Normaliseer kolomnamen (Tel → telefoonnummer, etc.)
+          const normalized = result.rows.map(r => {
+            const keys = Object.keys(r);
+            const get = (...names) => {
+              for (const nm of names) {
+                const k = keys.find(k => k.toLowerCase().trim() === nm.toLowerCase().trim());
+                if (k !== undefined) return r[k];
+              }
+              return "";
+            };
+            return {
+              voornaam:       String(get("Voornaam","voornaam") || "").trim(),
+              achternaam:     String(get("Achternaam","achternaam") || "").trim(),
+              dag:            String(get("Dag","dag") || "").trim(),
+              maand:          String(get("Maand","maand") || "").trim().toLowerCase(),
+              jaar:           String(get("Jaar","jaar") || "").replace(/\.0$/,"").trim(),
+              serienummer:    String(get("Serienummer","serienummer") || "").trim(),
+              uitdelen_datum: String(get("Uitdelen Datum","uitdelen_datum","uitdelen datum") || "").trim(),
+              adres:          String(get("Adres","adres") || "").trim(),
+              postcode:       String(get("Postcode","postcode") || "").trim(),
+              stadspasnummer: String(get("Stadspasnummer","stadspasnummer") || "").trim(),
+              telefoonnummer: String(get("Tel","tel","Telefoonnummer","telefoonnummer") || "").trim(),
+            };
+          }).filter(r => r.voornaam && r.achternaam);
+
+          setImportRows(normalized);
+          setImportStatus("preview");
+        } catch(err) {
+          setImportError("Fout bij verwerken: " + err.message);
+          setImportStatus("error");
+        }
+        e.target.value = "";
+      };
+
+      const handleImport = async () => {
+        if (!importRows || importRows.length === 0) return;
+        setImportStatus("importing");
+        setImportError("");
+
+        try {
+          const { data: { session } } = await supabaseClient.auth.getSession();
+          if (!session) {
+            setImportError("Geen actieve sessie. Log opnieuw in.");
+            setImportStatus("error");
+            return;
+          }
+
+          const res = await fetch(`${FUNCTIONS_URL}/import-winnaars`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({ rows: importRows, preview: false }),
+          });
+
+          const data = await res.json();
+
+          if (!res.ok || !data.ok) {
+            setImportError(data.error || "Import mislukt");
+            setImportStatus("error");
+            return;
+          }
+
+          setImportResult(data);
+          setImportStatus("done");
+          setImportRows(null);
+          setImportFile(null);
+        } catch(err) {
+          setImportError("Verbindingsfout: " + err.message);
+          setImportStatus("error");
+        }
+      };
+
+      const reset = () => {
+        setImportFile(null); setImportRows(null);
+        setImportStatus("idle"); setImportResult(null); setImportError("");
+      };
+
+      return (
+        <div>
+          <div style={{fontSize:15,fontWeight:700,color:"#1e293b",marginBottom:6}}>
+            📥 Winnaars importeren
+          </div>
+          <div style={{fontSize:13,color:"#64748b",marginBottom:20,lineHeight:1.6}}>
+            Importeer nieuwe winnaars vanuit een Excel-bestand (.xlsx). Bestaande personen worden bijgewerkt, nieuwe worden toegevoegd. Geen bestaande data wordt verwijderd.
+          </div>
+
+          {/* Verwachte kolommen */}
+          <div style={{background:"#f0fdf4",border:"1px solid #86efac",borderRadius:10,padding:"12px 14px",marginBottom:20,fontSize:13,color:"#166534"}}>
+            <div style={{fontWeight:700,marginBottom:6}}>✅ Verwachte kolomnamen in Excel:</div>
+            <div style={{fontFamily:"monospace",fontSize:12,color:"#15803d"}}>
+              Serienummer, Voornaam, Achternaam, Stadspasnummer, Tel, Uitdelen Datum, Dag, Maand, Jaar, Adres, Postcode
+            </div>
+          </div>
+
+          {/* Status: idle */}
+          {importStatus === "idle" && (
+            <div>
+              <input type="file" accept=".xlsx,.xls" ref={importFileRef}
+                onChange={handleFileSelect} style={{display:"none"}}/>
+              <button onClick={() => importFileRef.current.click()} style={{
+                padding:"12px 24px",borderRadius:10,border:"2px dashed #cbd5e1",
+                background:"#f8fafc",color:"#1d4ed8",fontSize:14,fontWeight:700,
+                cursor:"pointer",width:"100%",textAlign:"center",
+              }}>
+                📂 Kies Excel-bestand (.xlsx)
+              </button>
+            </div>
+          )}
+
+          {/* Status: parsing */}
+          {importStatus === "parsing" && (
+            <div style={{textAlign:"center",padding:"20px",color:"#64748b",fontSize:14}}>
+              ⏳ Bestand wordt gelezen...
+            </div>
+          )}
+
+          {/* Status: preview */}
+          {importStatus === "preview" && importRows && (
+            <div>
+              <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:10,padding:"14px",marginBottom:16}}>
+                <div style={{fontSize:14,fontWeight:700,color:"#1e40af",marginBottom:8}}>
+                  📋 Bestandsoverzicht: {importFile?.name}
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                  <div style={{fontSize:13,color:"#1e40af"}}>
+                    ✅ Geldige rijen: <strong>{importRows.length}</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Voorbeeld tabel */}
+              <div style={{fontSize:13,fontWeight:600,color:"#374151",marginBottom:8}}>
+                Voorbeeld (eerste 5 rijen):
+              </div>
+              <div style={{overflowX:"auto",marginBottom:16}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                  <thead>
+                    <tr style={{background:"#f1f5f9"}}>
+                      {["Voornaam","Achternaam","Dag","Maand","Jaar","Serienummer","Stadspas","Tel"].map(h=>(
+                        <th key={h} style={{padding:"6px 8px",textAlign:"left",borderBottom:"1px solid #e2e8f0",color:"#475569",whiteSpace:"nowrap"}}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importRows.slice(0,5).map((r,i)=>(
+                      <tr key={i} style={{borderBottom:"1px solid #f1f5f9"}}>
+                        <td style={{padding:"5px 8px"}}>{r.voornaam}</td>
+                        <td style={{padding:"5px 8px"}}>{r.achternaam}</td>
+                        <td style={{padding:"5px 8px"}}>{r.dag}</td>
+                        <td style={{padding:"5px 8px"}}>{r.maand}</td>
+                        <td style={{padding:"5px 8px"}}>{r.jaar}</td>
+                        <td style={{padding:"5px 8px",fontFamily:"monospace",fontSize:10}}>{r.serienummer||"—"}</td>
+                        <td style={{padding:"5px 8px",fontFamily:"monospace",fontSize:10}}>{r.stadspasnummer?r.stadspasnummer.substring(0,8)+"...":"—"}</td>
+                        <td style={{padding:"5px 8px"}}>{r.telefoonnummer||"—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {importRows.length > 5 && (
+                  <div style={{fontSize:11,color:"#94a3b8",marginTop:4,textAlign:"center"}}>
+                    ... en nog {importRows.length - 5} rijen
+                  </div>
+                )}
+              </div>
+
+              {/* Waarschuwing */}
+              <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"12px 14px",marginBottom:16,fontSize:13,color:"#92400e"}}>
+                ⚠️ Controleer de gegevens zorgvuldig voordat u importeert. Bestaande personen worden bijgewerkt.
+              </div>
+
+              <div style={{display:"flex",gap:10}}>
+                <button onClick={reset} style={{
+                  padding:"10px 20px",borderRadius:9,border:"1.5px solid #e2e8f0",
+                  background:"#fff",color:"#475569",fontSize:14,fontWeight:600,cursor:"pointer",
+                }}>← Annuleren</button>
+                <button onClick={handleImport} style={{
+                  padding:"10px 24px",borderRadius:9,border:"none",
+                  background:"linear-gradient(135deg,#16a34a,#22c55e)",
+                  color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",
+                  boxShadow:"0 4px 12px rgba(22,163,74,0.3)",
+                }}>
+                  🚀 Importeer {importRows.length} personen
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Status: importing */}
+          {importStatus === "importing" && (
+            <div style={{textAlign:"center",padding:"24px"}}>
+              <div style={{fontSize:32,marginBottom:12}}>⏳</div>
+              <div style={{fontSize:15,fontWeight:600,color:"#1e293b",marginBottom:6}}>
+                Importeren...
+              </div>
+              <div style={{fontSize:13,color:"#64748b"}}>
+                Even geduld, dit kan enkele seconden duren.
+              </div>
+            </div>
+          )}
+
+          {/* Status: done */}
+          {importStatus === "done" && importResult && (
+            <div>
+              <div style={{background:"#f0fdf4",border:"1px solid #86efac",borderRadius:12,padding:"20px",marginBottom:16,textAlign:"center"}}>
+                <div style={{fontSize:40,marginBottom:10}}>✅</div>
+                <div style={{fontSize:17,fontWeight:700,color:"#15803d",marginBottom:10}}>
+                  Import succesvol!
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,maxWidth:280,margin:"0 auto"}}>
+                  <div style={{background:"#dcfce7",borderRadius:8,padding:"10px"}}>
+                    <div style={{fontSize:24,fontWeight:700,color:"#16a34a"}}>{importResult.imported}</div>
+                    <div style={{fontSize:12,color:"#166534"}}>Geïmporteerd</div>
+                  </div>
+                  <div style={{background:importResult.errors>0?"#fef2f2":"#f0fdf4",borderRadius:8,padding:"10px"}}>
+                    <div style={{fontSize:24,fontWeight:700,color:importResult.errors>0?"#dc2626":"#16a34a"}}>{importResult.errors}</div>
+                    <div style={{fontSize:12,color:importResult.errors>0?"#dc2626":"#166534"}}>Fouten</div>
+                  </div>
+                </div>
+              </div>
+              <button onClick={reset} style={{
+                padding:"10px 24px",borderRadius:9,border:"none",
+                background:"#1d4ed8",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",
+              }}>+ Nieuw bestand importeren</button>
+            </div>
+          )}
+
+          {/* Status: error */}
+          {importStatus === "error" && (
+            <div>
+              <div style={{background:"#fef2f2",border:"1px solid #fecaca",borderRadius:10,padding:"14px",marginBottom:16,fontSize:14,color:"#dc2626"}}>
+                ❌ {importError}
+              </div>
+              <button onClick={reset} style={{
+                padding:"10px 20px",borderRadius:9,border:"1.5px solid #e2e8f0",
+                background:"#fff",color:"#475569",fontSize:14,fontWeight:600,cursor:"pointer",
+              }}>← Opnieuw proberen</button>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     function AdminPanels({cycleOpen,setCycleOpen,cycleStart,setCycleStart,cycleEnd,setCycleEnd,devices,setDevices,thankYou,setThankYou,submissions,allowMultiAddr,setAllowMultiAddr,exemptAddrs,setExemptAddrs,consentText,setConsentText,criteria,setCriteria,extraPages1,setExtraPages1,extraPages2,setExtraPages2}) {
       const [newLabel,setNewLabel]=useState("");
       const [newIcon,setNewIcon]=useState("📦");
@@ -711,7 +1009,7 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
       return (
         <div style={C.panel}>
           <div style={{display:"flex",borderBottom:"1px solid #e2e8f0"}}>
-            {[["stats","📊 Statistieken"],["cycle","📅 Cyclus"],["devices","🖥 Apparaten"],["address","🏠 Adressen"],["pages","📄 Pagina's"],["message","✉ Bericht"],["export","📥 Export"]].map(([k,l])=>(
+            {[["stats","📊 Statistieken"],["cycle","📅 Cyclus"],["devices","🖥 Apparaten"],["address","🏠 Adressen"],["pages","📄 Pagina's"],["message","✉ Bericht"],["import","📥 Import"],["export","⬇️ Export"]].map(([k,l])=>(
               <button key={k} onClick={()=>setTab(k)} style={{
                 flex:1,padding:"12px 6px",border:"none",background:"none",cursor:"pointer",
                 fontWeight:tab===k?700:400,fontSize:12,
@@ -895,6 +1193,9 @@ Per maand geldt er een maximum aantal aanmeldingen. Is dit aantal bereikt, dan k
                   ↺ Standaard herstellen
                 </button>
               </div>
+            )}
+            {tab==="import"&&(
+              <ImportTab/>
             )}
             {tab==="export"&&(
               <div>
